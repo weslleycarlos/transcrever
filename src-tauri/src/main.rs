@@ -1,3 +1,6 @@
+mod db;
+mod models;
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
