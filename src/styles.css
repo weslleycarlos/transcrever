@@ -1,0 +1,65 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, Segoe UI, Arial, sans-serif;
+  background: #f6f7f9;
+  color: #20242a;
+}
+
+button {
+  border: 1px solid #c8ced8;
+  background: #ffffff;
+  color: #20242a;
+  border-radius: 6px;
+  min-height: 36px;
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  min-height: 100vh;
+}
+
+.sidebar {
+  border-right: 1px solid #dfe3ea;
+  background: #ffffff;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sidebar h1 {
+  font-size: 20px;
+  margin: 0 0 12px;
+}
+
+.workspace {
+  padding: 20px;
+  min-width: 0;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.toolbar h2 {
+  font-size: 18px;
+  margin: 0;
+}
+
+.empty-state {
+  border: 1px dashed #b9c1ce;
+  border-radius: 8px;
+  padding: 28px;
+  background: #ffffff;
+}
