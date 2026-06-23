@@ -19,10 +19,7 @@ fn scans_supported_media_recursively_and_ignores_other_files() {
         .iter()
         .map(|media| media.file_name.clone())
         .collect();
-    assert_eq!(
-        names,
-        vec!["UPPER.WAV".to_string(), "root.mp3".to_string()]
-    );
+    assert_eq!(names, vec!["UPPER.WAV".to_string(), "root.mp3".to_string()]);
 
     let relative_paths: Vec<PathBuf> = discovered
         .iter()

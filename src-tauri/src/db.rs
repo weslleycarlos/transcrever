@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
-use crate::scanner::DiscoveredMedia;
 use crate::models::JobStatus;
+use crate::scanner::DiscoveredMedia;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use sqlx::{

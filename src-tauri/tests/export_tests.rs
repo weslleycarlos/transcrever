@@ -27,7 +27,11 @@ fn falls_back_to_segments_before_raw() {
 #[test]
 fn writes_txt_export_to_nested_temp_folder() {
     let temp = tempfile::tempdir().expect("temp dir");
-    let destination = temp.path().join("nested").join("exports").join("review.txt");
+    let destination = temp
+        .path()
+        .join("nested")
+        .join("exports")
+        .join("review.txt");
 
     write_txt_export(&destination, "reviewed text").expect("export should write");
 

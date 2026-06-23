@@ -30,7 +30,10 @@ pub fn choose_export_text(
 }
 
 pub fn write_txt_export(destination: &Path, text: &str) -> Result<()> {
-    if let Some(parent) = destination.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+    if let Some(parent) = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         fs::create_dir_all(parent).with_context(|| {
             format!(
                 "failed to create export destination directory {}",
