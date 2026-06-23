@@ -39,6 +39,14 @@ CREATE TABLE transcription_jobs (
     FOREIGN KEY(profile_id) REFERENCES transcription_profiles(id)
 );
 
+CREATE UNIQUE INDEX unique_active_job_without_profile
+ON transcription_jobs(media_file_id)
+WHERE profile_id IS NULL AND status IN ('pending', 'processing');
+
+CREATE UNIQUE INDEX unique_active_job_with_profile
+ON transcription_jobs(media_file_id, profile_id)
+WHERE profile_id IS NOT NULL AND status IN ('pending', 'processing');
+
 CREATE TABLE transcriptions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     media_file_id INTEGER NOT NULL,
