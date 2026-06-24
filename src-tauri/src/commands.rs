@@ -287,7 +287,7 @@ fn convert_to_wav_if_needed(media_path: &std::path::Path) -> anyhow::Result<std:
         return Ok(media_path.to_path_buf());
     }
 
-    let wav_path = media_path.with_extension("wav.transcrever");
+    let wav_path = media_path.with_extension("opus.wav");
     if wav_path.exists() {
         return Ok(wav_path);
     }
@@ -295,7 +295,7 @@ fn convert_to_wav_if_needed(media_path: &std::path::Path) -> anyhow::Result<std:
     // Try bundled ffmpeg first, then system PATH
     let ffmpeg = resolve_ffmpeg_exe();
 
-    let status = std::process::Command::new(&ffmpeg)
+    let output = std::process::Command::new(&ffmpeg)
         .args([
             "-y", "-i",
             &media_path.to_string_lossy(),
@@ -304,13 +304,18 @@ fn convert_to_wav_if_needed(media_path: &std::path::Path) -> anyhow::Result<std:
             "-sample_fmt", "s16",
             &wav_path.to_string_lossy(),
         ])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .with_context(|| format!("ffmpeg not found at {}. Install ffmpeg or use faster-whisper backend for opus files.", ffmpeg.display()))?;
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .with_context(|| format!("ffmpeg not found at {}", ffmpeg.display()))?;
 
-    if !status.success() {
-        anyhow::bail!("ffmpeg conversion failed for {}", media_path.display());
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "ffmpeg conversion failed for {}: {}",
+            media_path.display(),
+            stderr.trim()
+        );
     }
 
     Ok(wav_path)
