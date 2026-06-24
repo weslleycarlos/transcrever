@@ -5,3 +5,5 @@ src-tauri/gen/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+# Modelos whisper — baixar via script setup
+src-tauri/models/

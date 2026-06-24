@@ -8,5 +8,8 @@
     "dialog:default",
     "dialog:allow-open",
     "opener:default"
-  ]
+  ],
+  "assets": {
+    "scope": ["**"]
+  }
 }

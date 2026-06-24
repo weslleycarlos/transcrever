@@ -304,6 +304,13 @@ pub async fn list_jobs(state: State<'_, AppState>) -> Result<Vec<JobRow>, String
     Ok(jobs.into_iter().map(JobRow::from).collect())
 }
 
+#[tauri::command]
+pub async fn get_transcription(job_id: i64, state: State<'_, AppState>) -> Result<Option<db::TranscriptionView>, String> {
+    db::get_transcription_by_job(&state.pool, job_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::AppState;

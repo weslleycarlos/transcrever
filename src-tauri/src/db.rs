@@ -330,3 +330,105 @@ pub async fn save_transcription(
 
     Ok(transcription_id)
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptionView {
+    pub transcription_id: i64,
+    pub media_file_id: i64,
+    pub job_id: i64,
+    pub file_name: String,
+    pub absolute_path: String,
+    pub raw_text: String,
+    pub edited_text: Option<String>,
+    pub segments: Vec<SegmentView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SegmentView {
+    pub id: i64,
+    pub segment_index: i64,
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub raw_text: String,
+    pub edited_text: Option<String>,
+    pub confidence: Option<f32>,
+}
+
+pub async fn get_transcription_by_job(pool: &SqlitePool, job_id: i64) -> Result<Option<TranscriptionView>> {
+    let row = sqlx::query_as::<_, (i64, i64, i64, String, String, String, Option<String>)>(
+        r#"
+        SELECT t.id, t.media_file_id, t.job_id, m.file_name, m.absolute_path, t.raw_text, t.edited_text
+        FROM transcriptions t
+        JOIN media_files m ON m.id = t.media_file_id
+        WHERE t.job_id = ?1
+        "#,
+    )
+    .bind(job_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let (transcription_id, media_file_id, jid, file_name, absolute_path, raw_text, edited_text) =
+        match row {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+
+    let segments = sqlx::query_as::<_, (i64, i64, i64, i64, String, Option<String>, Option<f32>)>(
+        r#"
+        SELECT id, segment_index, start_ms, end_ms, raw_text, edited_text, confidence
+        FROM transcription_segments
+        WHERE transcription_id = ?1
+        ORDER BY segment_index
+        "#,
+    )
+    .bind(transcription_id)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|(id, idx, start_ms, end_ms, raw, edited, conf)| SegmentView {
+        id,
+        segment_index: idx,
+        start_ms,
+        end_ms,
+        raw_text: raw,
+        edited_text: edited,
+        confidence: conf,
+    })
+    .collect();
+
+    Ok(Some(TranscriptionView {
+        transcription_id,
+        media_file_id,
+        job_id: jid,
+        file_name,
+        absolute_path,
+        raw_text,
+        edited_text,
+        segments,
+    }))
+}
+
+pub async fn count_profiles(pool: &SqlitePool) -> Result<i64> {
+    let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM transcription_profiles")
+        .fetch_one(pool)
+        .await?;
+    Ok(row.0)
+}
+
+pub async fn create_default_profile(pool: &SqlitePool, model_path: &str) -> Result<i64> {
+    let profile = ProfileRow {
+        id: 0,
+        name: "Padrao (base.pt)".to_string(),
+        backend: "whisper_cpp".to_string(),
+        model_path: model_path.to_string(),
+        device: "cpu".to_string(),
+        precision: "auto".to_string(),
+        threads: 4,
+        language: Some("pt".to_string()),
+        task: "transcribe".to_string(),
+        advanced_json: "{}".to_string(),
+    };
+    save_profile(pool, &profile).await
+}

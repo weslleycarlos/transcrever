@@ -58,3 +58,24 @@ export interface JobRow {
   progress: number;
   errorMessage?: string | null;
 }
+
+export interface SegmentView {
+  id: number;
+  segmentIndex: number;
+  startMs: number;
+  endMs: number;
+  rawText: string;
+  editedText?: string | null;
+  confidence?: number | null;
+}
+
+export interface TranscriptionView {
+  transcriptionId: number;
+  mediaFileId: number;
+  jobId: number;
+  fileName: string;
+  absolutePath: string;
+  rawText: string;
+  editedText?: string | null;
+  segments: SegmentView[];
+}

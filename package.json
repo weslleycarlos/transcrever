@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "tsc --jsx react-jsx --module ESNext --moduleResolution bundler --target ES2022 --noEmit --strict src/main.tsx src/App.tsx src/types.ts && vite build",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "setup": "powershell -ExecutionPolicy Bypass -File scripts/setup-model.ps1 -Model base"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

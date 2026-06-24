@@ -51,6 +51,10 @@ button:disabled {
 .workspace {
   padding: 20px;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  max-height: 100vh;
 }
 
 .toolbar {
@@ -120,7 +124,8 @@ button:disabled {
   display: grid;
   grid-template-columns: minmax(280px, 420px) 1fr;
   gap: 16px;
-  min-height: 520px;
+  min-height: 0;
+  flex: 1;
 }
 
 .segments-panel,
@@ -183,11 +188,31 @@ button:disabled {
 
 .profile-panel {
   max-width: 720px;
+  overflow-y: auto;
+  flex: 1;
 }
 
 .profile-panel h2 {
   font-size: 18px;
   margin: 0 0 16px;
+}
+
+.btn-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: none;
+  color: #4b5563;
+  font-size: 13px;
+  padding: 4px 0;
+  margin-bottom: 12px;
+  cursor: pointer;
+  min-height: auto;
+}
+
+.btn-back:hover {
+  color: #1e40af;
 }
 
 .profile-section {
@@ -345,8 +370,9 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: calc(100vh - 260px);
+  flex: 1;
   overflow-y: auto;
+  min-height: 0;
 }
 
 .job-row {
@@ -373,6 +399,14 @@ button:disabled {
 .job-row.job-completed {
   border-color: #bbf7d0;
   background: #f0fdf4;
+}
+
+.job-clickable {
+  cursor: pointer;
+}
+
+.job-clickable:hover {
+  filter: brightness(0.97);
 }
 
 .job-info {
@@ -434,6 +468,38 @@ button:disabled {
 .status-exported { background: #fef3c7; color: #a16207; }
 
 /* Spinner animation */
+
+/* Review panel */
+
+.review-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.review-panel h2 {
+  font-size: 16px;
+  margin: 0 0 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.segments-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 100%;
+  overflow-y: auto;
+}
+
+.empty-hint {
+  color: #94a3b8;
+  font-size: 14px;
+  margin: 12px 0;
+}
 
 @keyframes spin {
   from { transform: rotate(0deg); }

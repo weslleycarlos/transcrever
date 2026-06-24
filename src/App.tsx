@@ -1,9 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Download, FolderOpen, Play, Settings, Plus, Trash2, Check, AlertCircle, Loader, Clock, Square } from "lucide-react";
+import { Download, FolderOpen, Play, Settings, Plus, Trash2, Check, AlertCircle, Loader, Clock, ArrowLeft } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { JobRow, ProfileRow, ScanResponse } from "./types";
+import type { JobRow, ProfileRow, ScanResponse, TranscriptionView } from "./types";
 
 const EMPTY_PROFILE: ProfileRow = {
   id: 0,
@@ -30,6 +30,8 @@ export default function App() {
   const [isRunning, setIsRunning] = useState(false);
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [selectedJob, setSelectedJob] = useState<JobRow | null>(null);
+  const [transcription, setTranscription] = useState<TranscriptionView | null>(null);
 
   const canStart = queuedCount > 0 && activeProfile !== null && !isRunning;
 
@@ -184,6 +186,22 @@ export default function App() {
     }
   }
 
+  async function handleViewJob(job: JobRow) {
+    if (job.status !== "completed") return;
+    setSelectedJob(job);
+    try {
+      const result = await invoke<TranscriptionView | null>("get_transcription", { jobId: job.jobId });
+      setTranscription(result);
+    } catch (error) {
+      setMessage(`Erro ao carregar transcricao: ${formatError(error)}`);
+    }
+  }
+
+  function handleBackToQueue() {
+    setSelectedJob(null);
+    setTranscription(null);
+  }
+
   const pendingCount = jobs.filter((j) => j.status === "pending").length;
   const processingCount = jobs.filter((j) => j.status === "processing").length;
   const errorCount = jobs.filter((j) => j.status === "error").length;
@@ -205,7 +223,7 @@ export default function App() {
         <div className={destination ? "path-box" : "path-box path-box-empty"}>
           {destination || "Destino nao selecionado"}
         </div>
-        <button type="button" onClick={() => setShowProfile((v) => !v)}>
+        <button type="button" onClick={() => setShowProfile(true)}>
           <Settings size={16} aria-hidden="true" />
           Perfil
         </button>
@@ -225,6 +243,13 @@ export default function App() {
             onChooseModel={chooseModelPath}
             onSelectProfile={handleSelectProfile}
             onDeleteProfile={handleDeleteProfile}
+            onClose={() => setShowProfile(false)}
+          />
+        ) : selectedJob ? (
+          <ReviewPanel
+            job={selectedJob}
+            transcription={transcription}
+            onBack={handleBackToQueue}
           />
         ) : (
           <>
@@ -235,6 +260,7 @@ export default function App() {
                 {isRunning ? "Processando..." : "Iniciar"}
               </button>
             </header>
+
             <div className="queue-summary">{message || "A fila ainda esta vazia."}</div>
 
             {isRunning && (
@@ -253,7 +279,14 @@ export default function App() {
             {jobs.length > 0 && (
               <div className="job-list">
                 {jobs.map((job) => (
-                  <div key={job.jobId} className={`job-row job-${job.status}`}>
+                  <div
+                    key={job.jobId}
+                    className={`job-row job-${job.status}${job.status === "completed" ? " job-clickable" : ""}`}
+                    onClick={() => handleViewJob(job)}
+                    role={job.status === "completed" ? "button" : undefined}
+                    tabIndex={job.status === "completed" ? 0 : undefined}
+                    onKeyDown={(e) => { if (e.key === "Enter" && job.status === "completed") handleViewJob(job); }}
+                  >
                     <div className="job-info">
                       <span className="job-name">{job.fileName}</span>
                       <span className="job-path">{job.relativePath}</span>
@@ -273,15 +306,11 @@ export default function App() {
               <section className="review-layout">
                 <div className="segments-panel">
                   <h3>Segmentos</h3>
-                  <button type="button" className="segment-row">
-                    <span>00:00 - 00:10</span>
-                    <strong>Exemplo de trecho transcrito.</strong>
-                  </button>
+                  <p className="empty-hint">Selecione uma origem e inicie a transcricao.</p>
                 </div>
                 <div className="text-panel">
                   <h3>Texto continuo</h3>
-                  <textarea defaultValue="Exemplo de texto continuo para revisao." />
-                  <audio controls />
+                  <p className="empty-hint">O texto aparecera aqui apos a transcricao.</p>
                 </div>
               </section>
             )}
@@ -313,6 +342,7 @@ function ProfilePanel({
   onChooseModel,
   onSelectProfile,
   onDeleteProfile,
+  onClose,
 }: {
   profile: ProfileRow;
   profiles: ProfileRow[];
@@ -321,9 +351,13 @@ function ProfilePanel({
   onChooseModel: () => void;
   onSelectProfile: (p: ProfileRow) => void;
   onDeleteProfile: (id: number) => void;
+  onClose: () => void;
 }) {
   return (
     <div className="profile-panel">
+      <button type="button" className="btn-back" onClick={onClose}>
+        <ArrowLeft size={16} /> Voltar para a fila
+      </button>
       <h2>Configuracao do Perfil de Transcricao</h2>
 
       {profiles.length > 0 && (
@@ -455,4 +489,63 @@ function formatError(error: unknown) {
   }
 
   return "erro desconhecido";
+}
+
+function ReviewPanel({
+  job,
+  transcription,
+  onBack,
+}: {
+  job: JobRow;
+  transcription: TranscriptionView | null;
+  onBack: () => void;
+}) {
+  function formatMs(ms: number) {
+    const totalSec = Math.floor(ms / 1000);
+    const min = Math.floor(totalSec / 60);
+    const sec = totalSec % 60;
+    return `${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  }
+
+  if (!transcription) {
+    return (
+      <div className="review-panel">
+        <button type="button" className="btn-back" onClick={onBack}>
+          <ArrowLeft size={16} /> Voltar para a fila
+        </button>
+        <p>Carregando transcricao...</p>
+      </div>
+    );
+  }
+
+  const editedText = transcription.editedText || "";
+  const displayText = editedText.trim() || transcription.rawText;
+
+  return (
+    <div className="review-panel">
+      <button type="button" className="btn-back" onClick={onBack}>
+        <ArrowLeft size={16} /> Voltar para a fila
+      </button>
+      <h2>{transcription.fileName}</h2>
+
+      <div className="review-layout">
+        <div className="segments-panel">
+          <h3>Segmentos</h3>
+          <div className="segments-list">
+            {transcription.segments.map((seg) => (
+              <button type="button" key={seg.id} className="segment-row">
+                <span>{formatMs(seg.startMs)} - {formatMs(seg.endMs)}</span>
+                <strong>{seg.rawText}</strong>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="text-panel">
+          <h3>Texto continuo</h3>
+          <textarea defaultValue={displayText} readOnly />
+          <audio controls src={`https://asset.localhost/${encodeURIComponent(transcription.absolutePath)}`} />
+        </div>
+      </div>
+    </div>
+  );
 }
