@@ -202,6 +202,34 @@ const durationOf = (t: TranscriptionView) => t.durationMs ?? (t.segments.length 
 const fileDateOf = (t: TranscriptionView) => t.modifiedAt || t.createdAt;
 const textOf = (t: TranscriptionView) => (t.editedText?.trim() || t.rawText);
 
+// Confidence: faster-whisper stores avg_logprob (<= 0); whisper.cpp may store a
+// probability (0..1) or nothing. Normalize both to a 0..1 probability.
+const segConfidence = (v: number | null | undefined): number | null => {
+  if (v == null || Number.isNaN(v)) return null;
+  const p = v <= 0 ? Math.exp(v) : v;
+  return Math.max(0, Math.min(1, p));
+};
+const fileConfidence = (t: TranscriptionView): number | null => {
+  let sum = 0, wsum = 0;
+  for (const s of t.segments) {
+    const c = segConfidence(s.confidence);
+    if (c == null) continue;
+    const w = Math.max(1, s.endMs - s.startMs);
+    sum += c * w; wsum += w;
+  }
+  return wsum > 0 ? sum / wsum : null;
+};
+const confLevel = (c: number) => (c >= 0.7 ? "high" : c >= 0.5 ? "mid" : "low");
+const confPct = (c: number) => Math.round(c * 100);
+
+function ConfBadge({ value, label }: { value: number; label?: boolean }) {
+  return (
+    <span className={"conf-chip conf-" + confLevel(value)} title="Confianca media estimada da transcricao">
+      <span className="conf-dot" />{label ? "Confianca " : ""}{confPct(value)}%
+    </span>
+  );
+}
+
 async function copyToClipboard(text: string): Promise<boolean> {
   try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
 }
@@ -415,6 +443,7 @@ function FileCard({ transcription, onViewJob, jobs, query }: { transcription: Tr
   const dur = durationOf(transcription);
   const text = textOf(transcription);
   const fileDate = fileDateOf(transcription);
+  const fconf = fileConfidence(transcription);
   const highlight = (t: string, q?: string) => {
     if (!q) return t;
     const re = new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
@@ -433,6 +462,7 @@ function FileCard({ transcription, onViewJob, jobs, query }: { transcription: Tr
             <span className="fc-tag"><HardDrive size={11} /> {fmtSize(transcription.sizeBytes)}</span>
             {dur > 0 && <span className="fc-tag"><Clock size={11} /> {fmtClock(dur)}</span>}
             {fileDate && <span className="fc-tag"><Calendar size={11} /> {fmtDate(fileDate)}</span>}
+            {fconf != null && <ConfBadge value={fconf} />}
           </div>
         </div>
         <JobStatusBadge status="completed" />
@@ -448,7 +478,7 @@ function FileCard({ transcription, onViewJob, jobs, query }: { transcription: Tr
         <div className="fc-segments">
           {transcription.segments.map(seg => (
             <div key={seg.id} className="segment-row">
-              <span className="seg-time">{fmtClock(seg.startMs)} - {fmtClock(seg.endMs)}</span>
+              <span className="seg-meta"><span className="seg-time">{fmtClock(seg.startMs)} - {fmtClock(seg.endMs)}</span>{segConfidence(seg.confidence) != null && <span className={"seg-conf conf-" + confLevel(segConfidence(seg.confidence)!)}>{confPct(segConfidence(seg.confidence)!)}%</span>}</span>
               <strong>{highlight(seg.editedText?.trim() || seg.rawText, query)}</strong>
             </div>
           ))}
@@ -487,6 +517,7 @@ function TranscriptionDetail({ transcription, onBack, onSaved }: { transcription
   const text = textOf(transcription);
   const dur = durationOf(transcription);
   const fileDate = fileDateOf(transcription);
+  const fconf = fileConfidence(transcription);
 
   useEffect(() => {
     invoke<string>("read_audio", { path: transcription.absolutePath }).then(setAudioUrl).catch(() => {});
@@ -512,6 +543,7 @@ function TranscriptionDetail({ transcription, onBack, onSaved }: { transcription
         <span className="fc-tag"><HardDrive size={11} /> {fmtSize(transcription.sizeBytes)}</span>
         {dur > 0 && <span className="fc-tag"><Clock size={11} /> {fmtClock(dur)}</span>}
         {fileDate && <span className="fc-tag"><Calendar size={11} /> {fmtDate(fileDate)}</span>}
+        {fconf != null && <ConfBadge value={fconf} label />}
       </div>
 
       <div className="detail-actions">
@@ -550,7 +582,7 @@ function TranscriptionDetail({ transcription, onBack, onSaved }: { transcription
           {(search.trim() ? transcription.segments.filter(s => s.rawText.toLowerCase().includes(search.toLowerCase())) : transcription.segments)
             .map(seg => (
               <div key={seg.id} className="segment-row">
-                <span className="seg-time">{fmtClock(seg.startMs)} - {fmtClock(seg.endMs)}</span>
+                <span className="seg-meta"><span className="seg-time">{fmtClock(seg.startMs)} - {fmtClock(seg.endMs)}</span>{segConfidence(seg.confidence) != null && <span className={"seg-conf conf-" + confLevel(segConfidence(seg.confidence)!)}>{confPct(segConfidence(seg.confidence)!)}%</span>}</span>
                 <strong>{seg.rawText}</strong>
               </div>
             ))}
