@@ -159,6 +159,21 @@ textarea { padding: 10px; min-height: 120px; resize: vertical; line-height: 1.55
 .review-count { font-size: 12px; color: #6b7280; margin-bottom: 10px; display: flex; gap: 8px; align-items: center; }
 .btn-link { border: none; background: none; color: #6366f1; font-size: 12px; padding: 0; min-height: auto; text-decoration: underline; }
 
+/* Toolbar date inputs */
+.tb-date { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #6b7280; font-weight: 500; }
+.tb-date input { min-height: 34px; }
+
+/* File card footer / actions */
+.fc-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 8px 6px 0; }
+.fc-actions { display: flex; gap: 6px; padding-right: 10px; }
+.btn-mini { border: 1px solid #e5e7eb; background: #fff; color: #475569; font-size: 12px; min-height: 30px; padding: 0 10px; gap: 5px; }
+.btn-mini:hover { background: #f9fafb; border-color: #cbd5e1; }
+.btn-save-sm { background: #166534; color: #fff; border-color: #166534; font-size: 12px; min-height: 30px; padding: 0 12px; gap: 5px; }
+
+/* Detail editing */
+.detail-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.detail-editor { width: 100%; min-height: 280px; font-size: 13px; line-height: 1.7; }
+
 /* Pagination */
 .pagination { display: flex; align-items: center; justify-content: center; gap: 14px; margin: 16px 0 4px; }
 .pagination button { font-size: 12px; }

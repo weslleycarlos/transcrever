@@ -1,9 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import {
-  AlertCircle, ArrowLeft, BarChart3, Calendar, Check, Clock, Download, FileAudio,
+  AlertCircle, ArrowLeft, BarChart3, Calendar, Check, Clock, Copy, Download, FileAudio,
   FolderOpen, HardDrive, Home, ListVideo, Loader, Pencil, Play,
-  Plus, RefreshCw, Search, Settings, Trash2, X,
+  Plus, RefreshCw, Save, Search, Settings, Trash2, X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { JobRow, ProfileRow, ScanResponse, TranscriptionView } from "./types";
@@ -153,6 +153,18 @@ const durationOf = (t: TranscriptionView) => t.durationMs ?? (t.segments.length 
 const fileDateOf = (t: TranscriptionView) => t.modifiedAt || t.createdAt;
 const textOf = (t: TranscriptionView) => (t.editedText?.trim() || t.rawText);
 
+async function copyToClipboard(text: string): Promise<boolean> {
+  try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
+}
+
+async function exportTranscriptionTxt(t: TranscriptionView): Promise<void> {
+  const base = t.fileName.replace(/\.[^.]+$/, "");
+  const dest = await save({ defaultPath: `${base}.txt`, filters: [{ name: "Texto", extensions: ["txt"] }] });
+  if (typeof dest === "string") {
+    await invoke("export_transcription", { jobId: t.jobId, destination: dest });
+  }
+}
+
 // Portuguese stopwords (also filters words with <= 4 letters at call site)
 const STOPWORDS = new Set([
   "que", "para", "como", "mais", "mas", "foi", "ele", "ela", "isso", "esse", "essa",
@@ -170,7 +182,11 @@ function ReviewView({ jobs, selectedJob, transcription, onViewJob, onBack }: any
   const [ext, setExt] = useState("");
   const [sort, setSort] = useState("recent");
   const [minSize, setMinSize] = useState(0);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
+  const [debounced, setDebounced] = useState("");
+  const [serverResults, setServerResults] = useState<TranscriptionView[] | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -180,6 +196,19 @@ function ReviewView({ jobs, selectedJob, transcription, onViewJob, onBack }: any
   }, []);
 
   useEffect(() => { load(); }, [load, jobs.length]);
+
+  // Debounce the search box so filtering large sets isn't recomputed per keystroke.
+  useEffect(() => { const id = setTimeout(() => setDebounced(search.trim()), 250); return () => clearTimeout(id); }, [search]);
+
+  // When the loaded set hits the cap, switch to authoritative server-side search.
+  const atCap = items.length >= 1000;
+  useEffect(() => {
+    if (!atCap || !debounced) { setServerResults(null); return; }
+    let cancel = false;
+    invoke<TranscriptionView[]>("search_transcriptions", { query: debounced })
+      .then(r => { if (!cancel) setServerResults(r); }).catch(() => {});
+    return () => { cancel = true; };
+  }, [debounced, atCap]);
 
   const extensions = useMemo(() => Array.from(new Set(items.map(t => t.extension.toLowerCase()))).sort(), [items]);
 
@@ -194,14 +223,20 @@ function ReviewView({ jobs, selectedJob, transcription, onViewJob, onBack }: any
   }, [items]);
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    let list = items.filter(t => {
+    const q = debounced.toLowerCase();
+    const from = dateFrom ? new Date(dateFrom).getTime() : null;
+    const to = dateTo ? new Date(dateTo).getTime() + 86_400_000 : null; // inclusive end of day
+    const dateVal = (t: TranscriptionView) => { const d = fileDateOf(t); return d ? new Date(d).getTime() : 0; };
+    const base = serverResults ?? items;
+    let list = base.filter(t => {
       if (ext && t.extension.toLowerCase() !== ext) return false;
       if (minSize && t.sizeBytes < minSize) return false;
+      const dv = dateVal(t);
+      if (from !== null && dv < from) return false;
+      if (to !== null && dv > to) return false;
       if (q && !textOf(t).toLowerCase().includes(q) && !t.fileName.toLowerCase().includes(q)) return false;
       return true;
     });
-    const dateVal = (t: TranscriptionView) => { const d = fileDateOf(t); return d ? new Date(d).getTime() : 0; };
     list = [...list].sort((a, b) => {
       switch (sort) {
         case "oldest": return dateVal(a) - dateVal(b);
@@ -212,7 +247,7 @@ function ReviewView({ jobs, selectedJob, transcription, onViewJob, onBack }: any
       }
     });
     return list;
-  }, [items, search, ext, minSize, sort]);
+  }, [items, serverResults, debounced, ext, minSize, sort, dateFrom, dateTo]);
 
   const summary = useMemo(() => ({
     count: items.length,
@@ -220,11 +255,12 @@ function ReviewView({ jobs, selectedJob, transcription, onViewJob, onBack }: any
     size: items.reduce((acc, t) => acc + t.sizeBytes, 0),
   }), [items]);
 
-  useEffect(() => { setPage(1); }, [search, ext, minSize, sort, items.length]);
+  useEffect(() => { setPage(1); }, [debounced, ext, minSize, sort, dateFrom, dateTo, items.length]);
 
-  if (selectedJob && transcription) return <TranscriptionDetail transcription={transcription} onBack={onBack} />;
+  if (selectedJob && transcription) return <TranscriptionDetail transcription={transcription} onBack={onBack} onSaved={load} />;
 
-  const hasFilters = !!(search || ext || minSize);
+  const hasFilters = !!(search || ext || minSize || dateFrom || dateTo);
+  const clearFilters = () => { setSearch(""); setExt(""); setMinSize(0); setDateFrom(""); setDateTo(""); };
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const current = Math.min(page, pageCount);
   const pageItems = filtered.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE);
@@ -281,11 +317,17 @@ function ReviewView({ jobs, selectedJob, transcription, onViewJob, onBack }: any
           <option value="size">Maior tamanho</option>
           <option value="duration">Maior duracao</option>
         </select>
+        <label className="tb-date" title="Data de modificacao inicial">De
+          <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+        </label>
+        <label className="tb-date" title="Data de modificacao final">Ate
+          <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} />
+        </label>
       </div>
 
       {hasFilters && (
         <div className="review-count">{filtered.length} de {items.length} resultado(s)
-          <button type="button" className="btn-link" onClick={() => { setSearch(""); setExt(""); setMinSize(0); }}>limpar filtros</button>
+          <button type="button" className="btn-link" onClick={clearFilters}>limpar filtros</button>
         </div>
       )}
 
@@ -295,7 +337,7 @@ function ReviewView({ jobs, selectedJob, transcription, onViewJob, onBack }: any
         <>
           <div className="review-cards">
             {pageItems.map(t => (
-              <FileCard key={t.transcriptionId} transcription={t} onViewJob={onViewJob} jobs={jobs} query={search.trim()} />
+              <FileCard key={t.transcriptionId} transcription={t} onViewJob={onViewJob} jobs={jobs} query={debounced} />
             ))}
           </div>
           <Pagination page={current} pageCount={pageCount} total={filtered.length} onPage={setPage} />
@@ -306,6 +348,7 @@ function ReviewView({ jobs, selectedJob, transcription, onViewJob, onBack }: any
 
 function FileCard({ transcription, onViewJob, jobs, query }: { transcription: TranscriptionView; onViewJob: (j: JobRow) => void; jobs: JobRow[]; query?: string }) {
   const [showSegments, setShowSegments] = useState(false);
+  const [copied, setCopied] = useState(false);
   const job = jobs.find(j => j.jobId === transcription.jobId);
   const dur = durationOf(transcription);
   const text = textOf(transcription);
@@ -348,16 +391,32 @@ function FileCard({ transcription, onViewJob, jobs, query }: { transcription: Tr
         </div>
       )}
 
-      <button type="button" className="btn-expand" onClick={() => setShowSegments(!showSegments)}>
-        {showSegments ? "Recolher segmentos" : `Ver ${transcription.segments.length} segmentos`}
-      </button>
+      <div className="fc-footer">
+        <button type="button" className="btn-expand" onClick={() => setShowSegments(!showSegments)}>
+          {showSegments ? "Recolher segmentos" : `Ver ${transcription.segments.length} segmentos`}
+        </button>
+        <div className="fc-actions">
+          <button type="button" className="btn-mini" title="Copiar texto"
+            onClick={async (e) => { e.stopPropagation(); const ok = await copyToClipboard(text); setCopied(ok); setTimeout(() => setCopied(false), 1500); }}>
+            {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? "Copiado" : "Copiar"}
+          </button>
+          <button type="button" className="btn-mini" title="Baixar .txt"
+            onClick={(e) => { e.stopPropagation(); exportTranscriptionTxt(transcription).catch(() => {}); }}>
+            <Download size={13} /> .txt
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
 
-function TranscriptionDetail({ transcription, onBack }: { transcription: TranscriptionView; onBack: () => void }) {
+function TranscriptionDetail({ transcription, onBack, onSaved }: { transcription: TranscriptionView; onBack: () => void; onSaved?: () => void }) {
   const [search, setSearch] = useState(""); const [audioUrl, setAudioUrl] = useState("");
   const [showSegments, setShowSegments] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(textOf(transcription));
+  const [saving, setSaving] = useState(false);
+  const [copied, setCopied] = useState(false);
   const text = textOf(transcription);
   const dur = durationOf(transcription);
   const fileDate = fileDateOf(transcription);
@@ -365,6 +424,16 @@ function TranscriptionDetail({ transcription, onBack }: { transcription: Transcr
   useEffect(() => {
     invoke<string>("read_audio", { path: transcription.absolutePath }).then(setAudioUrl).catch(() => {});
   }, [transcription.absolutePath]);
+
+  async function saveEdit() {
+    setSaving(true);
+    try {
+      await invoke("update_transcription", { jobId: transcription.jobId, editedText: draft });
+      transcription.editedText = draft.trim() || null;
+      setEditing(false);
+      onSaved?.();
+    } catch { /* */ } finally { setSaving(false); }
+  }
 
   return (
     <div className="view transcription-detail">
@@ -378,16 +447,32 @@ function TranscriptionDetail({ transcription, onBack }: { transcription: Transcr
         {fileDate && <span className="fc-tag"><Calendar size={11} /> {fmtDate(fileDate)}</span>}
       </div>
 
-      <div className="field" style={{ margin: "10px 0" }}>
-        <div className="field-row">
-          <input type="text" placeholder="Buscar nos segmentos..." value={search} onChange={e => setSearch(e.target.value)} />
-          <button type="button" disabled><Search size={14} /></button>
-        </div>
+      <div className="detail-actions">
+        {editing ? (
+          <>
+            <button type="button" className="btn-save-sm" disabled={saving} onClick={saveEdit}><Save size={13} /> {saving ? "Salvando..." : "Salvar"}</button>
+            <button type="button" className="btn-mini" onClick={() => { setDraft(text); setEditing(false); }}>Cancelar</button>
+          </>
+        ) : (
+          <button type="button" className="btn-mini" onClick={() => { setDraft(text); setEditing(true); }}><Pencil size={13} /> Editar</button>
+        )}
+        <button type="button" className="btn-mini" onClick={async () => { const ok = await copyToClipboard(text); setCopied(ok); setTimeout(() => setCopied(false), 1500); }}>
+          {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? "Copiado" : "Copiar"}
+        </button>
+        <button type="button" className="btn-mini" onClick={() => exportTranscriptionTxt(transcription).catch(() => {})}><Download size={13} /> Baixar .txt</button>
       </div>
 
       {audioUrl && <audio controls src={audioUrl} style={{ width: "100%", marginBottom: 10 }} />}
 
-      <div className="fc-text-full">{text}</div>
+      {editing
+        ? <textarea className="detail-editor" value={draft} onChange={e => setDraft(e.target.value)} />
+        : <div className="fc-text-full">{text}</div>}
+
+      <div className="field" style={{ margin: "12px 0 0" }}>
+        <div className="field-row">
+          <input type="text" placeholder="Buscar nos segmentos..." value={search} onChange={e => setSearch(e.target.value)} />
+        </div>
+      </div>
 
       <button type="button" className="btn-expand" onClick={() => setShowSegments(!showSegments)} style={{ marginTop: 8 }}>
         {showSegments ? "Ocultar segmentos" : "Ver segmentos"}

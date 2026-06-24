@@ -407,6 +407,37 @@ pub async fn list_transcriptions(state: State<'_, AppState>) -> Result<Vec<db::T
     db::list_transcriptions(&state.pool).await.map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn update_transcription(job_id: i64, edited_text: Option<String>, state: State<'_, AppState>) -> Result<(), String> {
+    let value = edited_text.filter(|t| !t.trim().is_empty());
+    db::update_transcription_text(&state.pool, job_id, value.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn export_transcription(job_id: i64, destination: String, state: State<'_, AppState>) -> Result<(), String> {
+    let view = db::get_transcription_by_job(&state.pool, job_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Transcricao nao encontrada".to_string())?;
+
+    let edited_segments: Vec<String> = view
+        .segments
+        .iter()
+        .map(|s| s.edited_text.clone().unwrap_or_else(|| s.raw_text.clone()))
+        .collect();
+
+    let text = crate::export::choose_export_text(
+        view.edited_text.as_deref(),
+        &edited_segments,
+        &view.raw_text,
+    );
+
+    crate::export::write_txt_export(std::path::Path::new(&destination), &text)
+        .map_err(|e| e.to_string())
+}
+
 fn mime_type(path: &str) -> &'static str {
     let ext = std::path::Path::new(path)
         .extension()

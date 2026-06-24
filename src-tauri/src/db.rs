@@ -425,6 +425,29 @@ pub async fn get_transcription_by_job(pool: &SqlitePool, job_id: i64) -> Result<
     }))
 }
 
+pub async fn update_transcription_text(
+    pool: &SqlitePool,
+    job_id: i64,
+    edited_text: Option<&str>,
+) -> Result<()> {
+    let now = Utc::now().to_rfc3339();
+    let result = sqlx::query(
+        r#"
+        UPDATE transcriptions
+        SET edited_text = ?1, updated_at = ?2
+        WHERE job_id = ?3
+        "#,
+    )
+    .bind(edited_text)
+    .bind(&now)
+    .bind(job_id)
+    .execute(pool)
+    .await?;
+
+    anyhow::ensure!(result.rows_affected() == 1, "transcription for job {job_id} not found");
+    Ok(())
+}
+
 pub async fn count_profiles(pool: &SqlitePool) -> Result<i64> {
     let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM transcription_profiles")
         .fetch_one(pool)
