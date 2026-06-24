@@ -8,3 +8,4 @@ src-tauri/gen/
 # Modelos e binarios — baixar via script setup
 src-tauri/models/
 src-tauri/binaries/
+src-tauri/resources/ffmpeg.exe

@@ -18,11 +18,9 @@ fn main() {
             // Create default profile on first run with bundled model + binary
             let count = tauri::async_runtime::block_on(db::count_profiles(&pool))?;
             if count == 0 {
-                let resource_dir = app.path().resource_dir()?;
-                let model_path = resource_dir
-                    .join("models")
-                    .join("whisper")
-                    .join("base.pt");
+                // In production (installed app), the model is in resource_dir
+                // In dev mode, it's in the source tree (resource_dir points to target/debug)
+                let model_path = resolve_model_path(app.path().resource_dir()?);
 
                 let profile_id = tauri::async_runtime::block_on(
                     db::create_default_profile(&pool, &model_path.to_string_lossy()),
@@ -57,4 +55,32 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run tauri app");
+}
+
+/// Returns the actual path to the bundled base.pt model.
+/// In production, the model is in resource_dir/models/whisper/base.pt.
+/// In dev mode (tauri dev), resource_dir points to target/debug/ where
+/// resources aren't copied, so we fall back to the source tree.
+fn resolve_model_path(resource_dir: std::path::PathBuf) -> std::path::PathBuf {
+    let bundled = resource_dir
+        .join("models")
+        .join("whisper")
+        .join("base.pt");
+
+    if bundled.exists() {
+        return bundled;
+    }
+
+    // Dev mode fallback: look in the source tree
+    let source = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("models")
+        .join("whisper")
+        .join("base.pt");
+
+    if source.exists() {
+        return source;
+    }
+
+    // Return the bundled path anyway (it will show a clear error if missing)
+    bundled
 }

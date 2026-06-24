@@ -3,6 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use anyhow::Context;
 use serde::Serialize;
 use sqlx::SqlitePool;
 use tauri::State;
@@ -263,22 +264,85 @@ fn run_transcription(
             backend.transcribe(media_path, &profile_config)
         }
         _ => {
-            // Use bundled whisper.cpp binary from resources/binaries/
-            let resource_dir = std::env::current_dir()
-                .unwrap_or_default();
-            // Try resource_dir first (production), then fall back to current_dir (dev)
-            let exe = resource_dir
-                .join("binaries")
-                .join("whisper-cli.exe");
-            let exe = if exe.exists() { exe } else {
-                std::env::current_dir()
-                    .unwrap_or_default()
-                    .join("whisper.cpp")
-                    .join("main.exe")
-            };
+            // Whisper.cpp via miniaudio may not support opus. Convert to WAV first if needed.
+            let actual_path = convert_to_wav_if_needed(media_path)?;
+            let exe = resolve_whisper_exe();
             let backend = crate::backend::whisper_cpp::WhisperCppBackend::new(exe);
-            backend.transcribe(media_path, &profile_config)
+            backend.transcribe(&actual_path, &profile_config)
         }
+    }
+}
+
+/// Converts opus files to WAV using bundled ffmpeg, returns the converted path.
+/// Returns the original path unchanged if conversion is not needed.
+fn convert_to_wav_if_needed(media_path: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
+    let ext = media_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    // Whisper.cpp handles mp3, wav, flac natively; opus needs conversion
+    if ext != "opus" {
+        return Ok(media_path.to_path_buf());
+    }
+
+    let wav_path = media_path.with_extension("wav.transcrever");
+    if wav_path.exists() {
+        return Ok(wav_path);
+    }
+
+    // Try bundled ffmpeg first, then system PATH
+    let ffmpeg = resolve_ffmpeg_exe();
+
+    let status = std::process::Command::new(&ffmpeg)
+        .args([
+            "-y", "-i",
+            &media_path.to_string_lossy(),
+            "-ar", "16000",
+            "-ac", "1",
+            "-sample_fmt", "s16",
+            &wav_path.to_string_lossy(),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .with_context(|| format!("ffmpeg not found at {}. Install ffmpeg or use faster-whisper backend for opus files.", ffmpeg.display()))?;
+
+    if !status.success() {
+        anyhow::bail!("ffmpeg conversion failed for {}", media_path.display());
+    }
+
+    Ok(wav_path)
+}
+
+fn resolve_ffmpeg_exe() -> std::path::PathBuf {
+    // Bundled in CARGO_MANIFEST_DIR (src-tauri/) during dev
+    let source = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("resources")
+        .join("ffmpeg.exe");
+    if source.exists() { return source; }
+
+    // Bundled in resource_dir during production
+    let bundled = std::env::current_dir()
+        .unwrap_or_default()
+        .join("resources")
+        .join("ffmpeg.exe");
+    if bundled.exists() { return bundled; }
+
+    // Fallback to system PATH
+    std::path::PathBuf::from("ffmpeg")
+}
+
+fn resolve_whisper_exe() -> std::path::PathBuf {
+    let exe = std::env::current_dir()
+        .unwrap_or_default()
+        .join("binaries")
+        .join("whisper-cli.exe");
+    if exe.exists() { exe } else {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("binaries")
+            .join("whisper-cli.exe")
     }
 }
 
