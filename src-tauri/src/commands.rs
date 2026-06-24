@@ -335,6 +335,14 @@ fn run_transcription(
         advanced_json: serde_json::from_str(&profile.advanced_json).unwrap_or_default(),
     };
 
+    // Reject empty files up front with a clear message instead of a cryptic
+    // decoder error further down.
+    if let Ok(metadata) = std::fs::metadata(media_path) {
+        if metadata.len() == 0 {
+            anyhow::bail!("arquivo de audio vazio (0 bytes)");
+        }
+    }
+
     match profile.backend.as_str() {
         "faster_whisper" => {
             let script_path = std::env::current_dir()
@@ -345,7 +353,8 @@ fn run_transcription(
             backend.transcribe(media_path, &profile_config)
         }
         _ => {
-            // Whisper.cpp via miniaudio may not support opus. Convert to WAV first if needed.
+            // Whisper.cpp's bundled decoders only handle a few formats reliably.
+            // Convert anything else (opus, mpga, m4a, video containers, ...) to WAV.
             let actual_path = convert_to_wav_if_needed(media_path)?;
             let exe = resolve_whisper_exe();
             let backend = crate::backend::whisper_cpp::WhisperCppBackend::new(exe);
@@ -354,8 +363,12 @@ fn run_transcription(
     }
 }
 
-/// Converts opus files to WAV using bundled ffmpeg, returns the converted path.
-/// Returns the original path unchanged if conversion is not needed.
+/// Formats whisper.cpp's bundled decoders read reliably. Everything else is
+/// transcoded to 16 kHz mono WAV via ffmpeg first.
+const WHISPER_NATIVE_FORMATS: &[&str] = &["wav", "mp3", "flac", "ogg"];
+
+/// Converts non-native audio/video files to WAV using bundled ffmpeg, returning
+/// the converted path. Returns the original path unchanged when not needed.
 fn convert_to_wav_if_needed(media_path: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
     let ext = media_path
         .extension()
@@ -363,12 +376,11 @@ fn convert_to_wav_if_needed(media_path: &std::path::Path) -> anyhow::Result<std:
         .unwrap_or_default()
         .to_ascii_lowercase();
 
-    // Whisper.cpp handles mp3, wav, flac natively; opus needs conversion
-    if ext != "opus" {
+    if WHISPER_NATIVE_FORMATS.contains(&ext.as_str()) {
         return Ok(media_path.to_path_buf());
     }
 
-    let wav_path = media_path.with_extension("opus.wav");
+    let wav_path = media_path.with_extension(format!("{ext}.wav"));
     if wav_path.exists() {
         return Ok(wav_path);
     }
