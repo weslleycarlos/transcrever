@@ -24,7 +24,8 @@ if (-not $fileName) {
 }
 
 $url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$fileName"
-$outDir = Join-Path $PSScriptRoot ".." $OutDir
+$outDir = Join-Path $PSScriptRoot ".."
+$outDir = Join-Path $outDir $OutDir
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
 $outFile = Join-Path $outDir "base.pt"

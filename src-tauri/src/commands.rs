@@ -263,10 +263,19 @@ fn run_transcription(
             backend.transcribe(media_path, &profile_config)
         }
         _ => {
-            let exe = std::env::current_dir()
-                .unwrap_or_default()
-                .join("whisper.cpp")
-                .join("main.exe");
+            // Use bundled whisper.cpp binary from resources/binaries/
+            let resource_dir = std::env::current_dir()
+                .unwrap_or_default();
+            // Try resource_dir first (production), then fall back to current_dir (dev)
+            let exe = resource_dir
+                .join("binaries")
+                .join("whisper-cli.exe");
+            let exe = if exe.exists() { exe } else {
+                std::env::current_dir()
+                    .unwrap_or_default()
+                    .join("whisper.cpp")
+                    .join("main.exe")
+            };
             let backend = crate::backend::whisper_cpp::WhisperCppBackend::new(exe);
             backend.transcribe(media_path, &profile_config)
         }

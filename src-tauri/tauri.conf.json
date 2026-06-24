@@ -24,7 +24,8 @@
     "active": true,
     "targets": "all",
     "resources": {
-      "models/": "./models/"
+      "models/": "./models/",
+      "binaries/": "./binaries/"
     }
   }
 }

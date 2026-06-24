@@ -441,10 +441,10 @@ pub async fn create_default_profile(pool: &SqlitePool, model_path: &str) -> Resu
     let profile = ProfileRow {
         id: 0,
         name: "Padrao (base.pt)".to_string(),
-        backend: "faster_whisper".to_string(),
+        backend: "whisper_cpp".to_string(),
         model_path: clean_path.to_string(),
         device: "cpu".to_string(),
-        precision: "float16".to_string(),
+        precision: "auto".to_string(),
         threads: 4,
         language: Some("pt".to_string()),
         task: "transcribe".to_string(),
