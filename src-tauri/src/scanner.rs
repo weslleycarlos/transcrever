@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "mp3", "wav", "m4a", "flac", "ogg", "opus", "aac", "wma", "mp4", "mkv", "mov", "avi", "webm",
+    "mp3", "mpga", "wav", "m4a", "flac", "ogg", "opus", "aac", "wma", "wmv",
+    "mp4", "m4v", "mkv", "mov", "avi", "webm", "flv", "3gp", "ts",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -7,13 +7,15 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 use tauri::State;
 
-use crate::{queue, scanner};
+use crate::backend::{TranscriptionBackend, TranscriptionProfile};
+use crate::{db, models::JobStatus, queue, scanner};
 
 #[derive(Clone)]
 pub struct AppState {
     pub pool: SqlitePool,
     pub selected_source: Arc<Mutex<Option<PathBuf>>>,
     pub selected_destination: Arc<Mutex<Option<PathBuf>>>,
+    pub active_profile: Arc<Mutex<Option<db::ProfileRow>>>,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -23,12 +25,39 @@ pub struct ScanResponse {
     pub queued_count: usize,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobRow {
+    pub job_id: i64,
+    pub media_file_id: i64,
+    pub file_name: String,
+    pub relative_path: String,
+    pub status: String,
+    pub progress: f32,
+    pub error_message: Option<String>,
+}
+
+impl From<db::JobWithMedia> for JobRow {
+    fn from(j: db::JobWithMedia) -> Self {
+        Self {
+            job_id: j.job_id,
+            media_file_id: j.media_file_id,
+            file_name: j.file_name,
+            relative_path: j.relative_path,
+            status: j.status,
+            progress: j.progress,
+            error_message: j.error_message,
+        }
+    }
+}
+
 impl AppState {
     pub fn new(pool: SqlitePool) -> Self {
         Self {
             pool,
             selected_source: Arc::new(Mutex::new(None)),
             selected_destination: Arc::new(Mutex::new(None)),
+            active_profile: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -89,6 +118,165 @@ pub async fn scan_source_folder(
 #[tauri::command]
 pub async fn set_export_folder(path: String, state: State<'_, AppState>) -> Result<(), String> {
     state.set_export_folder_path(path)
+}
+
+#[tauri::command]
+pub async fn save_profile(profile: db::ProfileRow, state: State<'_, AppState>) -> Result<db::ProfileRow, String> {
+    let id = db::save_profile(&state.pool, &profile)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let saved = db::ProfileRow { id, ..profile };
+    *state.active_profile.lock().map_err(|e| e.to_string())? = Some(saved.clone());
+    Ok(saved)
+}
+
+#[tauri::command]
+pub async fn list_profiles(state: State<'_, AppState>) -> Result<Vec<db::ProfileRow>, String> {
+    db::list_profiles(&state.pool).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_profile(id: i64, state: State<'_, AppState>) -> Result<(), String> {
+    db::delete_profile(&state.pool, id).await.map_err(|e| e.to_string())?;
+    let mut active = state.active_profile.lock().map_err(|e| e.to_string())?;
+    if active.as_ref().map_or(false, |p| p.id == id) {
+        *active = None;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_active_profile(state: State<'_, AppState>) -> Result<Option<db::ProfileRow>, String> {
+    Ok(state.active_profile.lock().map_err(|e| e.to_string())?.clone())
+}
+
+#[tauri::command]
+pub async fn set_active_profile(profile: db::ProfileRow, state: State<'_, AppState>) -> Result<(), String> {
+    *state.active_profile.lock().map_err(|e| e.to_string())? = Some(profile);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn start_transcription(state: State<'_, AppState>) -> Result<(), String> {
+    let profile = state
+        .active_profile
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone()
+        .ok_or_else(|| "Nenhum perfil de transcricao ativo. Configure um perfil primeiro.".to_string())?;
+
+    let pool = state.pool.clone();
+
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let next = match db::find_next_pending_job(&pool).await {
+                Ok(Some(job)) => job,
+                Ok(None) => break,
+                Err(e) => {
+                    eprintln!("erro ao buscar proximo job: {e}");
+                    break;
+                }
+            };
+
+            let (job_id, media_file_id, absolute_path) = next;
+            let media_path = std::path::PathBuf::from(&absolute_path);
+
+            let _ = db::update_job_status(&pool, job_id, JobStatus::Processing, 0.0, None).await;
+
+            let result = run_transcription(&media_path, &profile);
+            match result {
+                Ok(transcription) => {
+                    let segments: Vec<(i64, i64, String, Option<f32>)> = transcription
+                        .segments
+                        .iter()
+                        .map(|s| (s.start_ms, s.end_ms, s.text.clone(), s.confidence))
+                        .collect();
+
+                    match db::save_transcription(
+                        &pool,
+                        job_id,
+                        media_file_id,
+                        &transcription.raw_text,
+                        &segments,
+                    )
+                    .await
+                    {
+                        Ok(_) => {
+                            let _ = db::update_job_status(
+                                &pool, job_id, JobStatus::Completed, 1.0, None,
+                            )
+                            .await;
+                        }
+                        Err(e) => {
+                            let _ = db::update_job_status(
+                                &pool,
+                                job_id,
+                                JobStatus::Error,
+                                0.0,
+                                Some(&format!("erro ao salvar transcricao: {e}")),
+                            )
+                            .await;
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = db::update_job_status(
+                        &pool,
+                        job_id,
+                        JobStatus::Error,
+                        0.0,
+                        Some(&e.to_string()),
+                    )
+                    .await;
+                }
+            }
+        }
+    });
+
+    Ok(())
+}
+
+fn run_transcription(
+    media_path: &std::path::Path,
+    profile: &db::ProfileRow,
+) -> anyhow::Result<crate::backend::BackendTranscription> {
+    let profile_config = TranscriptionProfile {
+        model_path: profile.model_path.clone(),
+        device: profile.device.clone(),
+        precision: profile.precision.clone(),
+        threads: profile.threads as usize,
+        language: profile.language.clone(),
+        task: profile.task.clone(),
+        advanced_json: serde_json::from_str(&profile.advanced_json).unwrap_or_default(),
+    };
+
+    match profile.backend.as_str() {
+        "faster_whisper" => {
+            let script_path = std::env::current_dir()
+                .unwrap_or_default()
+                .join("scripts")
+                .join("faster_whisper_transcribe.py");
+            let backend = crate::backend::faster_whisper::FasterWhisperBackend::new(script_path);
+            backend.transcribe(media_path, &profile_config)
+        }
+        _ => {
+            let exe = std::env::current_dir()
+                .unwrap_or_default()
+                .join("whisper.cpp")
+                .join("main.exe");
+            let backend = crate::backend::whisper_cpp::WhisperCppBackend::new(exe);
+            backend.transcribe(media_path, &profile_config)
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn list_jobs(state: State<'_, AppState>) -> Result<Vec<JobRow>, String> {
+    let jobs = db::list_all_jobs(&state.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(jobs.into_iter().map(JobRow::from).collect())
 }
 
 #[cfg(test)]

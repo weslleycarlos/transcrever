@@ -15,3 +15,46 @@ export interface JobSummary {
   progress: number;
   errorMessage?: string | null;
 }
+
+export interface ScanResponse {
+  discoveredCount: number;
+  queuedCount: number;
+}
+
+export interface Segment {
+  id: number;
+  startMs: number;
+  endMs: number;
+  rawText: string;
+  editedText?: string | null;
+}
+
+export interface ReviewDocument {
+  mediaPath: string;
+  rawText: string;
+  editedText?: string | null;
+  segments: Segment[];
+}
+
+export interface ProfileRow {
+  id: number;
+  name: string;
+  backend: string;
+  modelPath: string;
+  device: string;
+  precision: string;
+  threads: number;
+  language?: string | null;
+  task: string;
+  advancedJson: string;
+}
+
+export interface JobRow {
+  jobId: number;
+  mediaFileId: number;
+  fileName: string;
+  relativePath: string;
+  status: string;
+  progress: number;
+  errorMessage?: string | null;
+}

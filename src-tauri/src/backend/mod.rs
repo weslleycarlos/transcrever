@@ -2,6 +2,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+pub mod faster_whisper;
 pub mod whisper_cpp;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -19,7 +19,14 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::scan_source_folder,
-            commands::set_export_folder
+            commands::set_export_folder,
+            commands::save_profile,
+            commands::list_profiles,
+            commands::delete_profile,
+            commands::get_active_profile,
+            commands::set_active_profile,
+            commands::start_transcription,
+            commands::list_jobs
         ])
         .run(tauri::generate_context!())
         .expect("failed to run tauri app");
