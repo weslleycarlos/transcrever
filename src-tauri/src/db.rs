@@ -263,9 +263,21 @@ pub struct JobWithMedia {
     pub media_file_id: i64,
     pub file_name: String,
     pub relative_path: String,
+    pub source_root: String,
     pub status: String,
     pub progress: f32,
     pub error_message: Option<String>,
+}
+
+/// Re-queues jobs left in `processing` by a previous session that was closed or
+/// crashed mid-run, so they are picked up again instead of being stuck.
+pub async fn reset_orphaned_jobs(pool: &SqlitePool) -> Result<u64> {
+    let result = sqlx::query(
+        "UPDATE transcription_jobs SET status = 'pending', started_at = NULL WHERE status = 'processing'",
+    )
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
 }
 
 pub async fn list_all_jobs(pool: &SqlitePool) -> Result<Vec<JobWithMedia>> {
@@ -276,6 +288,7 @@ pub async fn list_all_jobs(pool: &SqlitePool) -> Result<Vec<JobWithMedia>> {
             m.id AS media_file_id,
             m.file_name,
             m.relative_path,
+            m.source_root,
             j.status,
             j.progress,
             j.error_message

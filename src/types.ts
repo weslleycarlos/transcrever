@@ -54,6 +54,7 @@ export interface JobRow {
   mediaFileId: number;
   fileName: string;
   relativePath: string;
+  sourceRoot: string;
   status: string;
   progress: number;
   errorMessage?: string | null;
