@@ -566,7 +566,7 @@ function SettingsView({ profiles, activeProfile, concurrency, onSetConcurrency, 
   const threads = activeProfile?.threads || 4;
   const isGpu = activeProfile?.device === "cuda";
   const suggestion = isGpu ? 1 : Math.max(1, Math.min(8, Math.floor((cores || threads) / threads)));
-  const [dep, setDep] = useState<{ python: string | null; fasterWhisper: boolean; cuda: boolean } | null>(null);
+  const [dep, setDep] = useState<{ python: string | null; fasterWhisper: boolean; cuda: boolean; gpu: string | null } | null>(null);
   const [depBusy, setDepBusy] = useState(false);
   const [depLog, setDepLog] = useState("");
   async function refreshDeps() { try { setDep(await invoke("check_faster_whisper_env")); } catch { /* */ } }
@@ -623,6 +623,7 @@ function SettingsView({ profiles, activeProfile, concurrency, onSetConcurrency, 
             <div className="dep-row">
               <button type="button" className="btn-mini" disabled={depBusy} onClick={checkDeps}>{depBusy ? <Loader size={13} className="spin" /> : <RefreshCw size={13} />} Verificar ambiente</button>
               {dep && <>
+                <span className={"dep-chip " + (dep.gpu ? "dep-ok" : "dep-warn")} title={dep.gpu || "Nenhuma GPU NVIDIA detectada (nvidia-smi)"}>{dep.gpu ? `GPU: ${dep.gpu}` : "GPU NVIDIA nao detectada"}</span>
                 <span className={"dep-chip " + (dep.python ? "dep-ok" : "dep-bad")}>{dep.python ? `Python: ${dep.python}` : "Python ausente"}</span>
                 <span className={"dep-chip " + (dep.fasterWhisper ? "dep-ok" : "dep-bad")}>faster-whisper {dep.fasterWhisper ? "OK" : "ausente"}</span>
                 <span className={"dep-chip " + (dep.cuda ? "dep-ok" : "dep-warn")}>CUDA {dep.cuda ? "OK" : "ausente"}</span>

@@ -473,6 +473,29 @@ pub struct DependencyStatus {
     pub python: Option<String>,
     pub faster_whisper: bool,
     pub cuda: bool,
+    /// Name of the first NVIDIA GPU reported by nvidia-smi, if any.
+    pub gpu: Option<String>,
+}
+
+fn detect_nvidia_gpu() -> Option<String> {
+    let output = std::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=name", "--format=csv,noheader"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let name = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
 }
 
 fn detect_python() -> Option<String> {
@@ -508,7 +531,8 @@ pub async fn check_faster_whisper_env() -> Result<DependencyStatus, String> {
             ),
             None => (false, false),
         };
-        DependencyStatus { python, faster_whisper, cuda }
+        let gpu = detect_nvidia_gpu();
+        DependencyStatus { python, faster_whisper, cuda, gpu }
     })
     .await
     .map_err(|e| format!("Falha ao verificar ambiente: {e}"))
