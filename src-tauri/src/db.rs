@@ -183,6 +183,33 @@ pub async fn update_job_status(
 }
 
 pub async fn save_profile(pool: &SqlitePool, profile: &ProfileRow) -> Result<i64> {
+    // Update in place when an existing id is provided, otherwise insert.
+    if profile.id > 0 {
+        let result = sqlx::query(
+            r#"
+            UPDATE transcription_profiles
+            SET name = ?1, backend = ?2, model_path = ?3, device = ?4, precision = ?5,
+                threads = ?6, language = ?7, task = ?8, advanced_json = ?9
+            WHERE id = ?10
+            "#,
+        )
+        .bind(&profile.name)
+        .bind(&profile.backend)
+        .bind(&profile.model_path)
+        .bind(&profile.device)
+        .bind(&profile.precision)
+        .bind(profile.threads)
+        .bind(&profile.language)
+        .bind(&profile.task)
+        .bind(&profile.advanced_json)
+        .bind(profile.id)
+        .execute(pool)
+        .await?;
+
+        anyhow::ensure!(result.rows_affected() == 1, "profile {} not found", profile.id);
+        return Ok(profile.id);
+    }
+
     let result = sqlx::query(
         r#"
         INSERT INTO transcription_profiles

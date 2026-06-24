@@ -158,10 +158,12 @@ pub(crate) fn parse_whisper_json(json: &str) -> anyhow::Result<BackendTranscript
             .unwrap_or_default()
             .trim()
             .to_string();
-        let start_ms = timestamp_ms(item, "from", "start")
+        let start_ms = offset_ms(item, "from")
+            .or_else(|| timestamp_ms(item, "from", "start"))
             .or_else(|| timestamp_ms(item, "start", "start"))
             .unwrap_or_default();
-        let end_ms = timestamp_ms(item, "to", "end")
+        let end_ms = offset_ms(item, "to")
+            .or_else(|| timestamp_ms(item, "to", "end"))
             .or_else(|| timestamp_ms(item, "end", "end"))
             .unwrap_or(start_ms);
         let confidence = item
@@ -188,6 +190,14 @@ pub(crate) fn parse_whisper_json(json: &str) -> anyhow::Result<BackendTranscript
     Ok(BackendTranscription { raw_text, segments })
 }
 
+/// whisper.cpp `-oj` output includes integer-millisecond offsets under
+/// `offsets: { from, to }`, which are the most reliable timing source.
+fn offset_ms(item: &Value, key: &str) -> Option<i64> {
+    item.get("offsets")
+        .and_then(|offsets| offsets.get(key))
+        .and_then(Value::as_i64)
+}
+
 fn timestamp_ms(item: &Value, object_key: &str, scalar_key: &str) -> Option<i64> {
     if let Some(value) = item.get(scalar_key).and_then(Value::as_f64) {
         return Some((value * 1000.0).round() as i64);
@@ -203,7 +213,8 @@ fn parse_timestamp_ms(timestamp: &str) -> Option<i64> {
     let mut parts = timestamp.split(':');
     let hours = parts.next()?.parse::<i64>().ok()?;
     let minutes = parts.next()?.parse::<i64>().ok()?;
-    let seconds = parts.next()?.parse::<f64>().ok()?;
+    // whisper.cpp uses a comma as the decimal separator (e.g. "02,500").
+    let seconds = parts.next()?.replace(',', ".").parse::<f64>().ok()?;
     Some((((hours * 60 + minutes) * 60) as f64 * 1000.0 + seconds * 1000.0).round() as i64)
 }
 
@@ -257,6 +268,34 @@ mod tests {
         assert_eq!(transcription.segments[0].start_ms, 1000);
         assert_eq!(transcription.segments[0].end_ms, 2500);
         assert_eq!(transcription.segments[1].confidence, Some(0.75));
+    }
+
+    #[test]
+    fn parses_offsets_and_comma_timestamps() {
+        // Real whisper.cpp output: integer-ms offsets + comma-decimal timestamps.
+        let json = r#"
+        {
+          "transcription": [
+            {
+              "timestamps": { "from": "00:00:00,000", "to": "00:00:02,500" },
+              "offsets": { "from": 0, "to": 2500 },
+              "text": " ola "
+            },
+            {
+              "timestamps": { "from": "00:00:02,500", "to": "00:01:05,250" },
+              "text": "mundo"
+            }
+          ]
+        }
+        "#;
+
+        let transcription = parse_whisper_json(json).expect("json should parse");
+
+        assert_eq!(transcription.segments[0].start_ms, 0);
+        assert_eq!(transcription.segments[0].end_ms, 2500);
+        // Second segment has no offsets, falls back to comma-decimal timestamps.
+        assert_eq!(transcription.segments[1].start_ms, 2500);
+        assert_eq!(transcription.segments[1].end_ms, 65_250);
     }
 
     #[test]

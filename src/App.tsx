@@ -548,10 +548,24 @@ function SettingsView({ profiles, activeProfile, concurrency, onSetConcurrency, 
   const threads = activeProfile?.threads || 4;
   const isGpu = activeProfile?.device === "cuda";
   const suggestion = isGpu ? 1 : Math.max(1, Math.min(8, Math.floor((cores || threads) / threads)));
-  async function chooseModel() { try { if (form.backend === "faster_whisper") { const s = await open({ directory: true, multiple: false }); if (typeof s === "string") setForm(f => ({ ...f, modelPath: s })); } else { const s = await open({ multiple: false, filters: [{ name: "Modelo", extensions: ["bin", "ggml"] }] }); if (typeof s === "string") setForm(f => ({ ...f, modelPath: s })); } } catch { } }
+  const editing = form.id > 0;
+  async function chooseModel() {
+    try {
+      if (form.backend === "faster_whisper") {
+        const s = await open({ directory: true, multiple: false });
+        if (typeof s === "string") setForm(f => ({ ...f, modelPath: s }));
+      } else {
+        const s = await open({ multiple: false, filters: [
+          { name: "Modelos Whisper", extensions: ["bin", "ggml", "gguf", "pt", "pth"] },
+          { name: "Todos os arquivos", extensions: ["*"] },
+        ] });
+        if (typeof s === "string") setForm(f => ({ ...f, modelPath: s }));
+      }
+    } catch { }
+  }
   async function save() { if (!form.name.trim() || !form.modelPath.trim()) return; try { await invoke("save_profile", { profile: form }); onProfilesChanged(); setForm({ ...EMPTY_PROFILE }); } catch { } }
   async function select(p: ProfileRow) { try { await invoke("set_active_profile", { profile: p }); onProfilesChanged(); } catch { } }
-  async function del(id: number) { try { await invoke("delete_profile", { id }); onProfilesChanged(); } catch { } }
+  async function del(id: number) { try { await invoke("delete_profile", { id }); onProfilesChanged(); if (form.id === id) setForm({ ...EMPTY_PROFILE }); } catch { } }
   return (
     <div className="view settings-view"><h2>Configuracoes</h2>
       <section className="card">
@@ -568,8 +582,8 @@ function SettingsView({ profiles, activeProfile, concurrency, onSetConcurrency, 
         </div>
         {isGpu && <p className="hint">No modo CUDA, recomenda-se 1 por vez para nao esgotar a memoria da GPU.</p>}
       </section>
-      {profiles.length > 0 && <section className="card"><h3>Perfis salvos</h3><div className="profile-list">{profiles.map((p: ProfileRow) => (<div key={p.id} className={"profile-card" + (activeProfile?.id === p.id ? " profile-active" : "")}><div className="profile-card-info"><strong>{p.name} {activeProfile?.id === p.id && <Check size={12} />}</strong><span>{p.backend} · {p.device} · {p.threads} threads · {p.precision}</span><span className="profile-model-path">{p.modelPath}</span></div><div className="profile-card-actions">{activeProfile?.id !== p.id && <button type="button" onClick={() => select(p)}>Usar</button>}<button type="button" className="btn-danger" onClick={() => del(p.id)}><Trash2 size={14} /></button></div></div>))}</div></section>}
-      <section className="card"><h3>Novo perfil</h3>
+      {profiles.length > 0 && <section className="card"><h3>Perfis salvos</h3><div className="profile-list">{profiles.map((p: ProfileRow) => (<div key={p.id} className={"profile-card" + (activeProfile?.id === p.id ? " profile-active" : "")}><div className="profile-card-info"><strong>{p.name} {activeProfile?.id === p.id && <Check size={12} />}</strong><span>{p.backend} · {p.device} · {p.threads} threads · {p.precision}</span><span className="profile-model-path">{p.modelPath}</span></div><div className="profile-card-actions">{activeProfile?.id !== p.id && <button type="button" onClick={() => select(p)}>Usar</button>}<button type="button" onClick={() => setForm({ ...p })}><Pencil size={13} /></button><button type="button" className="btn-danger" onClick={() => del(p.id)}><Trash2 size={14} /></button></div></div>))}</div></section>}
+      <section className="card"><h3>{editing ? `Editar perfil: ${form.name || "(sem nome)"}` : "Novo perfil"}</h3>
         <label className="field">Nome<input type="text" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Meu modelo" /></label>
         <label className="field">Backend<div className="pill-group"><button type="button" className={"pill" + (form.backend === "faster_whisper" ? " pill-active" : "")} onClick={() => setForm({ ...form, backend: "faster_whisper" })}>faster-whisper</button><button type="button" className={"pill" + (form.backend === "whisper_cpp" ? " pill-active" : "")} onClick={() => setForm({ ...form, backend: "whisper_cpp" })}>whisper.cpp</button></div></label>
         <label className="field">Modelo<div className="field-row"><input type="text" value={form.modelPath} onChange={e => setForm({ ...form, modelPath: e.target.value })} placeholder={form.backend === "faster_whisper" ? "Pasta do modelo CTranslate2" : "Arquivo .bin"} /><button type="button" onClick={chooseModel}>...</button></div></label>
@@ -580,7 +594,10 @@ function SettingsView({ profiles, activeProfile, concurrency, onSetConcurrency, 
           <label className="field">Idioma<input type="text" value={form.language ?? ""} onChange={e => setForm({ ...form, language: e.target.value || null })} placeholder="pt / en / auto" /></label>
           <label className="field">Tarefa<select value={form.task} onChange={e => setForm({ ...form, task: e.target.value })}><option value="transcribe">Transcrever</option><option value="translate">Traduzir</option></select></label>
         </div>
-        <button type="button" className="btn-save" onClick={save}><Plus size={14} /> Salvar perfil</button>
+        <div className="card-actions">
+          <button type="button" className="btn-save" onClick={save}>{editing ? <><Save size={14} /> Salvar alteracoes</> : <><Plus size={14} /> Salvar perfil</>}</button>
+          {editing && <button type="button" onClick={() => setForm({ ...EMPTY_PROFILE })}>Cancelar</button>}
+        </div>
       </section>
     </div>
   );
