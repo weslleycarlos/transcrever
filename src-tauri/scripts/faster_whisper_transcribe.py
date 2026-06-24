@@ -11,6 +11,11 @@ import json
 import sys
 import time
 
+# Force UTF-8 on Windows to avoid encoding issues with accented characters
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
 
 def resolve_model_path(raw: str) -> str:
     """Resolve model path for faster-whisper.
