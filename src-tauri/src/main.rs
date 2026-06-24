@@ -64,6 +64,8 @@ fn main() {
             commands::list_jobs,
             commands::get_transcription,
             commands::read_audio,
+            commands::check_faster_whisper_env,
+            commands::install_faster_whisper,
             commands::search_transcriptions,
             commands::list_transcriptions,
             commands::update_transcription,

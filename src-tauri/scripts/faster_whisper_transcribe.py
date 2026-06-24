@@ -17,6 +17,41 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8")
 
 
+def enable_cuda_dll_search() -> None:
+    """Make pip-installed CUDA wheels (nvidia-cublas-cu12, nvidia-cudnn-cu12)
+    discoverable on Windows without touching the system PATH.
+
+    CTranslate2 loads cublas64_12.dll / cudnn at runtime via the OS DLL search.
+    The nvidia-* wheels drop those DLLs under site-packages/nvidia/<pkg>/bin,
+    which is not searched by default, so we register them explicitly.
+    """
+    import os
+    import sys
+
+    if sys.platform != "win32" or not hasattr(os, "add_dll_directory"):
+        return
+
+    try:
+        import importlib.util
+    except Exception:
+        return
+
+    for pkg in ("nvidia.cublas", "nvidia.cudnn"):
+        try:
+            spec = importlib.util.find_spec(pkg)
+        except (ImportError, ValueError):
+            continue
+        if not spec or not spec.submodule_search_locations:
+            continue
+        for base in spec.submodule_search_locations:
+            bin_dir = os.path.join(base, "bin")
+            if os.path.isdir(bin_dir):
+                try:
+                    os.add_dll_directory(bin_dir)
+                except OSError:
+                    pass
+
+
 def resolve_model_path(raw: str) -> str:
     """Resolve model path for faster-whisper.
 
@@ -34,6 +69,37 @@ def resolve_model_path(raw: str) -> str:
     return path
 
 
+def _is_gpu_runtime_error(exc: Exception) -> bool:
+    """Detects missing CUDA/cuDNN/cuBLAS runtime libraries."""
+    msg = str(exc).lower()
+    return any(
+        token in msg
+        for token in ("cublas", "cudnn", "cuda", "libcublas", "no cuda", "gpu")
+    )
+
+
+def _run(model_dir, audio_path, device, compute_type, language, task, threads):
+    from faster_whisper import WhisperModel
+
+    model = WhisperModel(
+        model_dir,
+        device=device,
+        compute_type=compute_type,
+        num_workers=threads,
+        cpu_threads=threads,
+    )
+    segments_result, info = model.transcribe(
+        audio_path,
+        language=language,
+        task=task,
+        beam_size=5,
+        vad_filter=True,
+    )
+    # Consume the generator here so GPU/encode errors surface inside this try.
+    all_segments = list(segments_result)
+    return all_segments, info
+
+
 def transcribe(
     model_path: str,
     audio_path: str,
@@ -44,7 +110,7 @@ def transcribe(
     threads: int,
 ) -> dict:
     try:
-        from faster_whisper import WhisperModel
+        from faster_whisper import WhisperModel  # noqa: F401
     except ImportError:
         print(
             json.dumps({
@@ -58,22 +124,25 @@ def transcribe(
 
     model_dir = resolve_model_path(model_path)
     start = time.monotonic()
-    model = WhisperModel(
-        model_dir,
-        device=device,
-        compute_type=compute_type,
-        num_workers=threads,
-    )
 
-    segments_result, info = model.transcribe(
-        audio_path,
-        language=language,
-        task=task,
-        beam_size=5,
-        vad_filter=True,
-    )
+    try:
+        all_segments, info = _run(
+            model_dir, audio_path, device, compute_type, language, task, threads
+        )
+    except Exception as exc:  # noqa: BLE001
+        # If the GPU runtime is unavailable (e.g. cublas64_12.dll missing) and we
+        # were not already on CPU, retry transparently on CPU.
+        if device != "cpu" and _is_gpu_runtime_error(exc):
+            print(
+                f"[transcrever] GPU indisponivel ({exc}); refazendo na CPU.",
+                file=sys.stderr,
+            )
+            all_segments, info = _run(
+                model_dir, audio_path, "cpu", "auto", language, task, threads
+            )
+        else:
+            raise
 
-    all_segments = list(segments_result)
     elapsed = time.monotonic() - start
 
     segments = []
@@ -109,6 +178,8 @@ def main():
     parser.add_argument("--threads", type=int, default=4)
 
     args = parser.parse_args()
+
+    enable_cuda_dll_search()
 
     result = transcribe(
         model_path=args.model,

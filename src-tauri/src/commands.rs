@@ -467,6 +467,107 @@ fn resolve_model_path(raw: &str, backend: &str) -> String {
     raw.to_string()
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DependencyStatus {
+    pub python: Option<String>,
+    pub faster_whisper: bool,
+    pub cuda: bool,
+    /// Name of the first NVIDIA GPU reported by nvidia-smi, if any.
+    pub gpu: Option<String>,
+}
+
+fn detect_nvidia_gpu() -> Option<String> {
+    let output = std::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=name", "--format=csv,noheader"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let name = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+fn detect_python() -> Option<String> {
+    for candidate in ["python", "python3", "py"] {
+        let ok = std::process::Command::new(candidate)
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if ok {
+            return Some(candidate.to_string());
+        }
+    }
+    None
+}
+
+fn python_import_ok(python: &str, code: &str) -> bool {
+    std::process::Command::new(python)
+        .args(["-c", code])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+pub async fn check_faster_whisper_env() -> Result<DependencyStatus, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let python = detect_python();
+        let (faster_whisper, cuda) = match &python {
+            Some(p) => (
+                python_import_ok(p, "import faster_whisper"),
+                python_import_ok(p, "import nvidia.cublas, nvidia.cudnn"),
+            ),
+            None => (false, false),
+        };
+        let gpu = detect_nvidia_gpu();
+        DependencyStatus { python, faster_whisper, cuda, gpu }
+    })
+    .await
+    .map_err(|e| format!("Falha ao verificar ambiente: {e}"))
+}
+
+#[tauri::command]
+pub async fn install_faster_whisper(gpu: bool) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let python = detect_python()
+            .ok_or_else(|| "Python nao encontrado no PATH. Instale o Python 3.10+ primeiro.".to_string())?;
+
+        let mut args = vec!["-m", "pip", "install", "--upgrade", "faster-whisper"];
+        if gpu {
+            args.push("nvidia-cublas-cu12");
+            args.push("nvidia-cudnn-cu12");
+        }
+
+        let output = std::process::Command::new(&python)
+            .args(&args)
+            .output()
+            .map_err(|e| format!("Falha ao executar pip: {e}"))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let combined = format!("{stdout}\n{stderr}").trim().to_string();
+        if output.status.success() {
+            Ok(combined)
+        } else {
+            Err(combined)
+        }
+    })
+    .await
+    .map_err(|e| format!("Falha ao instalar dependencias: {e}"))?
+}
+
 #[tauri::command]
 pub async fn list_jobs(state: State<'_, AppState>) -> Result<Vec<JobRow>, String> {
     let jobs = db::list_all_jobs(&state.pool)
