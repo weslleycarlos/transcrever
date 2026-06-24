@@ -475,27 +475,33 @@ pub struct DependencyStatus {
     pub cuda: bool,
     /// Name of the first NVIDIA GPU reported by nvidia-smi, if any.
     pub gpu: Option<String>,
+    /// CUDA compute capability (e.g. "5.2") of that GPU, if reported.
+    pub compute_cap: Option<String>,
 }
 
-fn detect_nvidia_gpu() -> Option<String> {
-    let output = std::process::Command::new("nvidia-smi")
-        .args(["--query-gpu=name", "--format=csv,noheader"])
+fn detect_nvidia_gpu() -> (Option<String>, Option<String>) {
+    let output = match std::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=name,compute_cap", "--format=csv,noheader"])
         .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let name = String::from_utf8_lossy(&output.stdout)
+    {
+        Ok(o) if o.status.success() => o,
+        _ => return (None, None),
+    };
+
+    let line = String::from_utf8_lossy(&output.stdout)
         .lines()
         .next()
         .unwrap_or_default()
         .trim()
         .to_string();
-    if name.is_empty() {
-        None
-    } else {
-        Some(name)
+    if line.is_empty() {
+        return (None, None);
     }
+
+    let mut parts = line.split(',').map(|p| p.trim().to_string());
+    let name = parts.next().filter(|s| !s.is_empty());
+    let cap = parts.next().filter(|s| !s.is_empty());
+    (name, cap)
 }
 
 fn detect_python() -> Option<String> {
@@ -531,8 +537,8 @@ pub async fn check_faster_whisper_env() -> Result<DependencyStatus, String> {
             ),
             None => (false, false),
         };
-        let gpu = detect_nvidia_gpu();
-        DependencyStatus { python, faster_whisper, cuda, gpu }
+        let (gpu, compute_cap) = detect_nvidia_gpu();
+        DependencyStatus { python, faster_whisper, cuda, gpu, compute_cap }
     })
     .await
     .map_err(|e| format!("Falha ao verificar ambiente: {e}"))

@@ -320,6 +320,8 @@ function ReviewView({ jobs, selectedJob, transcription, onViewJob, onBack }: any
         case "name": return a.fileName.localeCompare(b.fileName);
         case "size": return b.sizeBytes - a.sizeBytes;
         case "duration": return durationOf(b) - durationOf(a);
+        case "conf_high": return (fileConfidence(b) ?? -1) - (fileConfidence(a) ?? -1);
+        case "conf_low": return (fileConfidence(a) ?? 2) - (fileConfidence(b) ?? 2);
         default: return dateVal(b) - dateVal(a);
       }
     });
@@ -393,6 +395,8 @@ function ReviewView({ jobs, selectedJob, transcription, onViewJob, onBack }: any
           <option value="name">Nome (A-Z)</option>
           <option value="size">Maior tamanho</option>
           <option value="duration">Maior duracao</option>
+          <option value="conf_low">Menor confianca</option>
+          <option value="conf_high">Maior confianca</option>
         </select>
         <label className="tb-date" title="Data de modificacao inicial">De
           <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
@@ -598,7 +602,7 @@ function SettingsView({ profiles, activeProfile, concurrency, onSetConcurrency, 
   const threads = activeProfile?.threads || 4;
   const isGpu = activeProfile?.device === "cuda";
   const suggestion = isGpu ? 1 : Math.max(1, Math.min(8, Math.floor((cores || threads) / threads)));
-  const [dep, setDep] = useState<{ python: string | null; fasterWhisper: boolean; cuda: boolean; gpu: string | null } | null>(null);
+  const [dep, setDep] = useState<{ python: string | null; fasterWhisper: boolean; cuda: boolean; gpu: string | null; computeCap: string | null } | null>(null);
   const [depBusy, setDepBusy] = useState(false);
   const [depLog, setDepLog] = useState("");
   async function refreshDeps() { try { setDep(await invoke("check_faster_whisper_env")); } catch { /* */ } }
@@ -655,11 +659,14 @@ function SettingsView({ profiles, activeProfile, concurrency, onSetConcurrency, 
             <div className="dep-row">
               <button type="button" className="btn-mini" disabled={depBusy} onClick={checkDeps}>{depBusy ? <Loader size={13} className="spin" /> : <RefreshCw size={13} />} Verificar ambiente</button>
               {dep && <>
-                <span className={"dep-chip " + (dep.gpu ? "dep-ok" : "dep-warn")} title={dep.gpu || "Nenhuma GPU NVIDIA detectada (nvidia-smi)"}>{dep.gpu ? `GPU: ${dep.gpu}` : "GPU NVIDIA nao detectada"}</span>
+                <span className={"dep-chip " + (dep.gpu ? "dep-ok" : "dep-warn")} title={dep.gpu || "Nenhuma GPU NVIDIA detectada (nvidia-smi)"}>{dep.gpu ? `GPU: ${dep.gpu}${dep.computeCap ? ` (cc ${dep.computeCap})` : ""}` : "GPU NVIDIA nao detectada"}</span>
                 <span className={"dep-chip " + (dep.python ? "dep-ok" : "dep-bad")}>{dep.python ? `Python: ${dep.python}` : "Python ausente"}</span>
                 <span className={"dep-chip " + (dep.fasterWhisper ? "dep-ok" : "dep-bad")}>faster-whisper {dep.fasterWhisper ? "OK" : "ausente"}</span>
                 <span className={"dep-chip " + (dep.cuda ? "dep-ok" : "dep-warn")}>CUDA {dep.cuda ? "OK" : "ausente"}</span>
               </>}
+              {dep && dep.gpu && dep.computeCap && parseFloat(dep.computeCap) < 7 && (
+                <p className="hint" style={{ width: "100%", margin: "6px 0 0", color: "#a16207" }}>GPU antiga (cc {dep.computeCap}): nao suporta float16. Use precisao <strong>FP32</strong> no perfil para rodar na GPU (caso contrario o sistema cai para CPU automaticamente).</p>
+              )}
             </div>
             <div className="dep-actions">
               <button type="button" className="btn-mini" disabled={depBusy} onClick={() => installDeps(false)}><Download size={13} /> Instalar faster-whisper</button>
@@ -680,7 +687,7 @@ function SettingsView({ profiles, activeProfile, concurrency, onSetConcurrency, 
         <div className="field-grid">
           <label className="field">Precisao{form.backend === "whisper_cpp"
             ? <input type="text" value="Definida pelo modelo" disabled title="No whisper.cpp a precisao/quantizacao ja vem no arquivo do modelo" />
-            : <select value={form.precision} onChange={e => setForm({ ...form, precision: e.target.value })}><option value="auto">Auto - o modelo decide</option><option value="float16">FP16 - melhor GPU</option><option value="int8_float16">INT8 FP16 - equilibrado</option><option value="int8">INT8 - pouca memoria</option></select>}
+            : <select value={form.precision} onChange={e => setForm({ ...form, precision: e.target.value })}><option value="auto">Auto - o modelo decide</option><option value="float32">FP32 - GPUs antigas (Maxwell/Pascal)</option><option value="float16">FP16 - GPU moderna (≥ Volta)</option><option value="int8_float16">INT8 FP16 - equilibrado</option><option value="int8">INT8 - pouca memoria</option></select>}
           </label>
           <label className="field">Threads<select value={form.threads} onChange={e => setForm({ ...form, threads: Number(e.target.value) })}>{[1, 2, 4, 6, 8, 12, 16, 24, 32].map(n => <option key={n} value={n}>{n} threads</option>)}</select></label>
           <label className="field">Idioma<input type="text" value={form.language ?? ""} onChange={e => setForm({ ...form, language: e.target.value || null })} placeholder="pt / en / auto" /></label>
