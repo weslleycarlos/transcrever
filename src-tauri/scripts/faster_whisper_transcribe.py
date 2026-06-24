@@ -125,23 +125,39 @@ def transcribe(
     model_dir = resolve_model_path(model_path)
     start = time.monotonic()
 
-    try:
-        all_segments, info = _run(
-            model_dir, audio_path, device, compute_type, language, task, threads
-        )
-    except Exception as exc:  # noqa: BLE001
-        # If the GPU runtime is unavailable (e.g. cublas64_12.dll missing) and we
-        # were not already on CPU, retry transparently on CPU.
-        if device != "cpu" and _is_gpu_runtime_error(exc):
-            print(
-                f"[transcrever] GPU indisponivel ({exc}); refazendo na CPU.",
-                file=sys.stderr,
-            )
+    # Build an ordered list of attempts. On a GPU runtime failure we first try
+    # float32 on the same GPU (old cards like Maxwell/Pascal don't support
+    # float16), and only then fall back to CPU.
+    attempts = [(device, compute_type)]
+    if device != "cpu":
+        if compute_type != "float32":
+            attempts.append((device, "float32"))
+        attempts.append(("cpu", "auto"))
+
+    all_segments = info = None
+    used_device = used_compute = None
+    last_exc = None
+    for idx, (dev, ct) in enumerate(attempts):
+        try:
             all_segments, info = _run(
-                model_dir, audio_path, "cpu", "auto", language, task, threads
+                model_dir, audio_path, dev, ct, language, task, threads
             )
-        else:
-            raise
+            used_device, used_compute = dev, ct
+            if idx > 0:
+                print(
+                    f"[transcrever] fallback: device={dev}, compute_type={ct} "
+                    f"(motivo: {last_exc})",
+                    file=sys.stderr,
+                )
+            break
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            # Only a GPU runtime issue is worth retrying; real errors (bad model,
+            # unreadable audio) should surface immediately.
+            if not _is_gpu_runtime_error(exc):
+                raise
+    else:
+        raise last_exc  # all attempts exhausted
 
     elapsed = time.monotonic() - start
 
@@ -163,6 +179,8 @@ def transcribe(
         "detected_language": info.language,
         "duration_ms": round(info.duration * 1000),
         "elapsed_ms": round(elapsed * 1000),
+        "device_used": used_device,
+        "compute_type_used": used_compute,
     }
 
 

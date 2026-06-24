@@ -126,13 +126,14 @@ fn validate_profile(profile: &TranscriptionProfile) -> anyhow::Result<()> {
 
 fn precision_to_compute_type(precision: &str) -> anyhow::Result<&'static str> {
     match precision.to_ascii_lowercase().as_str() {
+        "fp32" | "float32" => Ok("float32"),
         "fp16" | "float16" => Ok("float16"),
         "int8" => Ok("int8"),
         "int8_float16" => Ok("int8_float16"),
         "int8_bfloat16" => Ok("int8_bfloat16"),
         "auto" | "default" => Ok("auto"),
         other => bail!(
-            "unsupported precision '{}' for faster-whisper; use auto, float16, int8, int8_float16, or int8_bfloat16",
+            "unsupported precision '{}' for faster-whisper; use auto, float32, float16, int8, int8_float16, or int8_bfloat16",
             other
         ),
     }
