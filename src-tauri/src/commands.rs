@@ -1,6 +1,9 @@
 use std::{
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use anyhow::Context;
@@ -17,6 +20,7 @@ pub struct AppState {
     pub selected_source: Arc<Mutex<Option<PathBuf>>>,
     pub selected_destination: Arc<Mutex<Option<PathBuf>>>,
     pub active_profile: Arc<Mutex<Option<db::ProfileRow>>>,
+    pub cancel_flag: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -59,6 +63,7 @@ impl AppState {
             selected_source: Arc::new(Mutex::new(None)),
             selected_destination: Arc::new(Mutex::new(None)),
             active_profile: Arc::new(Mutex::new(None)),
+            cancel_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -168,9 +173,14 @@ pub async fn start_transcription(state: State<'_, AppState>) -> Result<(), Strin
         .ok_or_else(|| "Nenhum perfil de transcricao ativo. Configure um perfil primeiro.".to_string())?;
 
     let pool = state.pool.clone();
+    let cancel = state.cancel_flag.clone();
+    cancel.store(false, Ordering::SeqCst);
 
     tauri::async_runtime::spawn(async move {
         loop {
+            if cancel.load(Ordering::SeqCst) {
+                break;
+            }
             let next = match db::find_next_pending_job(&pool).await {
                 Ok(Some(job)) => job,
                 Ok(None) => break,
@@ -235,6 +245,12 @@ pub async fn start_transcription(state: State<'_, AppState>) -> Result<(), Strin
         }
     });
 
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_transcription(state: State<'_, AppState>) -> Result<(), String> {
+    state.cancel_flag.store(true, Ordering::SeqCst);
     Ok(())
 }
 

@@ -48,6 +48,7 @@ fn main() {
             commands::get_active_profile,
             commands::set_active_profile,
             commands::start_transcription,
+            commands::stop_transcription,
             commands::list_jobs,
             commands::get_transcription,
             commands::read_audio,

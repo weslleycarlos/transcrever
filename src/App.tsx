@@ -3,7 +3,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   AlertCircle, ArrowLeft, BarChart3, Calendar, Check, Clock, Copy, Download, FileAudio,
   FolderOpen, HardDrive, Home, ListVideo, Loader, Pencil, Play,
-  Plus, RefreshCw, Save, Search, Settings, Trash2, X,
+  Plus, RefreshCw, Save, Search, Settings, Square, Trash2, X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { JobRow, ProfileRow, ScanResponse, TranscriptionView } from "./types";
@@ -24,6 +24,8 @@ export default function App() {
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [queuedCount, setQueuedCount] = useState(0);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const stoppedRef = useRef(false);
+  const [stopping, setStopping] = useState(false);
   const [profiles, setProfiles] = useState<ProfileRow[]>([]);
   const [activeProfile, setActiveProfile] = useState<ProfileRow | null>(null);
   const [selectedJob, setSelectedJob] = useState<JobRow | null>(null);
@@ -38,8 +40,13 @@ export default function App() {
       try {
         const list = await invoke<JobRow[]>("list_jobs");
         setJobs(list);
-        const pending = list.filter((j) => j.status === "pending" || j.status === "processing");
-        if (pending.length === 0 && list.length > 0) { setIsRunning(false); stopPolling(); setMessage("Transcricao concluida."); }
+        const processing = list.filter((j) => j.status === "processing").length;
+        const pending = list.filter((j) => j.status === "pending").length;
+        if (stoppedRef.current) {
+          if (processing === 0) { setIsRunning(false); setStopping(false); stopPolling(); setMessage("Processamento interrompido."); }
+          return;
+        }
+        if (processing === 0 && pending === 0 && list.length > 0) { setIsRunning(false); stopPolling(); setMessage("Transcricao concluida."); }
       } catch { /* */ }
     }, 1500);
   }, []);
@@ -47,7 +54,8 @@ export default function App() {
   async function loadProfiles() { try { setProfiles(await invoke<ProfileRow[]>("list_profiles")); } catch { /* */ } }
   async function loadActiveProfile() { try { setActiveProfile(await invoke<ProfileRow | null>("get_active_profile")); } catch { /* */ } }
   async function handleScan() { if (!source) return; try { const r = await invoke<ScanResponse>("scan_source_folder", { path: source }); setQueuedCount(r.queuedCount); setMessage(r.discoveredCount + " arquivos encontrados, " + r.queuedCount + " na fila."); } catch (e) { setMessage("Erro: " + formatError(e)); } }
-  async function handleStart() { if (!canStart) return; try { await invoke("start_transcription"); setIsRunning(true); setNav("queue"); setMessage("Transcricao em andamento..."); startPolling(); } catch (e) { setMessage("Erro: " + formatError(e)); } }
+  async function handleStart() { if (!canStart) return; try { stoppedRef.current = false; setStopping(false); await invoke("start_transcription"); setIsRunning(true); setNav("queue"); setMessage("Transcricao em andamento..."); startPolling(); } catch (e) { setMessage("Erro: " + formatError(e)); } }
+  async function handleStop() { stoppedRef.current = true; setStopping(true); setMessage("Interrompendo... o arquivo atual sera finalizado."); try { await invoke("stop_transcription"); } catch (e) { setMessage("Erro: " + formatError(e)); } if (!pollingRef.current) startPolling(); }
   async function handleViewJob(job: JobRow) { if (job.status !== "completed") return; setSelectedJob(job); try { setTranscription(await invoke<TranscriptionView | null>("get_transcription", { jobId: job.jobId })); } catch (e) { setMessage("Erro: " + formatError(e)); } }
 
   const stats = useMemo(() => {
@@ -68,7 +76,7 @@ export default function App() {
       </nav>
       <section className="workspace">
         {nav === "home" && <HomeView source={source} setSource={setSource} destination={destination} setDestination={setDestination} message={message} setMessage={setMessage} queuedCount={queuedCount} setQueuedCount={setQueuedCount} isRunning={isRunning} canStart={canStart} onScan={handleScan} onStart={handleStart} />}
-        {nav === "queue" && <QueueView stats={stats} jobs={jobs} message={message} isRunning={isRunning} canStart={canStart} onStart={handleStart} onViewJob={handleViewJob} />}
+        {nav === "queue" && <QueueView stats={stats} jobs={jobs} message={message} isRunning={isRunning} stopping={stopping} canStart={canStart} onStart={handleStart} onStop={handleStop} onViewJob={handleViewJob} />}
         {nav === "review" && <ReviewView jobs={jobs} selectedJob={selectedJob} transcription={transcription} onViewJob={handleViewJob} onBack={() => { setSelectedJob(null); setTranscription(null); }} />}
         {nav === "settings" && <SettingsView profiles={profiles} activeProfile={activeProfile} onProfilesChanged={() => { loadProfiles(); loadActiveProfile(); }} />}
       </section>
@@ -104,13 +112,22 @@ function HomeView({ source, setSource, destination, setDestination, message, set
 }
 
 const PAGE_SIZE = 25;
+const QUEUE_FILTERS: { key: string; label: string }[] = [
+  { key: "all", label: "Todos" },
+  { key: "processing", label: "Processando" },
+  { key: "pending", label: "Pendentes" },
+  { key: "completed", label: "Concluidos" },
+  { key: "error", label: "Erros" },
+];
 
-function QueueView({ stats, jobs, message, isRunning, canStart, onStart, onViewJob }: any) {
+function QueueView({ stats, jobs, message, isRunning, stopping, canStart, onStart, onStop, onViewJob }: any) {
   const [page, setPage] = useState(1);
-  const pageCount = Math.max(1, Math.ceil(jobs.length / PAGE_SIZE));
+  const [filter, setFilter] = useState("all");
+  const filtered = useMemo(() => filter === "all" ? jobs : jobs.filter((j: JobRow) => j.status === filter), [jobs, filter]);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const current = Math.min(page, pageCount);
-  const pageJobs = jobs.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE);
-  useEffect(() => { setPage(1); }, [jobs.length]);
+  const pageJobs = filtered.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE);
+  useEffect(() => { setPage(1); }, [filter, filtered.length]);
   return (
     <div className="view queue-view"><h2>Fila</h2>
       <div className="stats-grid">
@@ -122,10 +139,39 @@ function QueueView({ stats, jobs, message, isRunning, canStart, onStart, onViewJ
       </div>
       {stats.total > 0 && <div className="progress-bar-container"><div className="progress-bar" style={{ width: stats.progress + "%" }} /></div>}
       {message && <div className="queue-summary">{message}</div>}
-      {!isRunning && stats.pending > 0 && <button type="button" className="btn-start" disabled={!canStart} onClick={onStart} style={{ marginBottom: 12 }}><Play size={14} /> Retomar</button>}
-      <div className="job-list">{pageJobs.map((job: JobRow) => (<div key={job.jobId} className={"job-row job-" + job.status + (job.status === "completed" ? " job-clickable" : "")} onClick={() => onViewJob(job)} role={job.status === "completed" ? "button" : undefined} tabIndex={job.status === "completed" ? 0 : undefined} onKeyDown={(e) => { if (e.key === "Enter" && job.status === "completed") onViewJob(job); }}><div className="job-info"><span className="job-name">{job.fileName}</span><span className="job-path">{job.relativePath}</span></div><div className="job-status-area"><JobStatusBadge status={job.status} />{job.errorMessage && <span className="job-error" title={job.errorMessage}>{job.errorMessage}</span>}</div></div>))}</div>
-      <Pagination page={current} pageCount={pageCount} total={jobs.length} onPage={setPage} />
+
+      <div className="queue-controls">
+        {isRunning
+          ? <button type="button" className="btn-stop" disabled={stopping} onClick={onStop}><Square size={13} /> {stopping ? "Interrompendo..." : "Parar"}</button>
+          : stats.pending > 0 && <button type="button" className="btn-start btn-start-sm" disabled={!canStart} onClick={onStart}><Play size={14} /> Retomar</button>}
+        <div className="queue-filters">
+          {QUEUE_FILTERS.map(f => {
+            const count = f.key === "all" ? stats.total : f.key === "processing" ? stats.processing : f.key === "pending" ? stats.pending : f.key === "completed" ? stats.completed : stats.errors;
+            return (
+              <button type="button" key={f.key} className={"qf-chip" + (filter === f.key ? " qf-active" : "") + (f.key === "error" && count > 0 ? " qf-error" : "")} onClick={() => setFilter(f.key)}>
+                {f.label} <span className="qf-count">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="job-list">{pageJobs.map((job: JobRow) => (
+        <div key={job.jobId} className={"job-row job-" + job.status + (job.status === "completed" ? " job-clickable" : "")} onClick={() => onViewJob(job)} role={job.status === "completed" ? "button" : undefined} tabIndex={job.status === "completed" ? 0 : undefined} onKeyDown={(e) => { if (e.key === "Enter" && job.status === "completed") onViewJob(job); }}>
+          <div className="job-main">
+            <div className="job-info">
+              {job.status === "processing" && <Loader size={14} className="spin job-spin" />}
+              <span className="job-name">{job.fileName}</span>
+              <span className="job-path">{job.relativePath}</span>
+            </div>
+            <div className="job-status-area"><JobStatusBadge status={job.status} /></div>
+          </div>
+          {job.errorMessage && <div className="job-error-full"><AlertCircle size={13} /> <span>{job.errorMessage}</span></div>}
+        </div>
+      ))}</div>
+      <Pagination page={current} pageCount={pageCount} total={filtered.length} onPage={setPage} />
       {jobs.length === 0 && <p className="empty-hint">Nenhum job. Va para Inicio e escaneie uma pasta.</p>}
+      {jobs.length > 0 && filtered.length === 0 && <p className="empty-hint">Nenhum item neste filtro.</p>}
     </div>
   );
 }
