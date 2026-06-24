@@ -126,6 +126,16 @@ textarea { padding: 10px; min-height: 120px; resize: vertical; line-height: 1.55
 .settings-desc { font-size: 12px; color: #6b7280; line-height: 1.6; margin: 0 0 12px; }
 .settings-suggest { display: flex; align-items: center; gap: 10px; font-size: 12px; color: #475569; margin-top: 8px; flex-wrap: wrap; }
 
+/* Dependencies panel */
+.dep-panel { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; background: #f9fafb; margin-bottom: 12px; }
+.dep-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dep-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.dep-chip { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 12px; }
+.dep-ok { background: #dcfce7; color: #16a34a; }
+.dep-bad { background: #fee2e2; color: #dc2626; }
+.dep-warn { background: #fef9c3; color: #a16207; }
+.dep-log { margin-top: 10px; background: #0f172a; color: #e2e8f0; font-size: 11px; line-height: 1.5; padding: 10px; border-radius: 6px; max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* Pills */
 .pill-group { display: flex; gap: 4px; }
 .pill { border: 1px solid #d1d5db; background: #fff; color: #6b7280; border-radius: 20px; padding: 5px 14px; font-size: 12px; font-weight: 500; min-height: 30px; cursor: pointer; }

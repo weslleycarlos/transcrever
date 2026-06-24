@@ -17,6 +17,41 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8")
 
 
+def enable_cuda_dll_search() -> None:
+    """Make pip-installed CUDA wheels (nvidia-cublas-cu12, nvidia-cudnn-cu12)
+    discoverable on Windows without touching the system PATH.
+
+    CTranslate2 loads cublas64_12.dll / cudnn at runtime via the OS DLL search.
+    The nvidia-* wheels drop those DLLs under site-packages/nvidia/<pkg>/bin,
+    which is not searched by default, so we register them explicitly.
+    """
+    import os
+    import sys
+
+    if sys.platform != "win32" or not hasattr(os, "add_dll_directory"):
+        return
+
+    try:
+        import importlib.util
+    except Exception:
+        return
+
+    for pkg in ("nvidia.cublas", "nvidia.cudnn"):
+        try:
+            spec = importlib.util.find_spec(pkg)
+        except (ImportError, ValueError):
+            continue
+        if not spec or not spec.submodule_search_locations:
+            continue
+        for base in spec.submodule_search_locations:
+            bin_dir = os.path.join(base, "bin")
+            if os.path.isdir(bin_dir):
+                try:
+                    os.add_dll_directory(bin_dir)
+                except OSError:
+                    pass
+
+
 def resolve_model_path(raw: str) -> str:
     """Resolve model path for faster-whisper.
 
@@ -143,6 +178,8 @@ def main():
     parser.add_argument("--threads", type=int, default=4)
 
     args = parser.parse_args()
+
+    enable_cuda_dll_search()
 
     result = transcribe(
         model_path=args.model,

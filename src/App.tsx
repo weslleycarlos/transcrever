@@ -566,6 +566,12 @@ function SettingsView({ profiles, activeProfile, concurrency, onSetConcurrency, 
   const threads = activeProfile?.threads || 4;
   const isGpu = activeProfile?.device === "cuda";
   const suggestion = isGpu ? 1 : Math.max(1, Math.min(8, Math.floor((cores || threads) / threads)));
+  const [dep, setDep] = useState<{ python: string | null; fasterWhisper: boolean; cuda: boolean } | null>(null);
+  const [depBusy, setDepBusy] = useState(false);
+  const [depLog, setDepLog] = useState("");
+  async function refreshDeps() { try { setDep(await invoke("check_faster_whisper_env")); } catch { /* */ } }
+  async function checkDeps() { setDepBusy(true); setDepLog(""); await refreshDeps(); setDepBusy(false); }
+  async function installDeps(gpu: boolean) { setDepBusy(true); setDepLog("Instalando... isso pode levar alguns minutos."); try { const out = await invoke<string>("install_faster_whisper", { gpu }); setDepLog(out || "Concluido."); } catch (e) { setDepLog("Erro:\n" + formatError(e)); } await refreshDeps(); setDepBusy(false); }
   const editing = form.id > 0;
   async function chooseModel() {
     try {
@@ -612,6 +618,24 @@ function SettingsView({ profiles, activeProfile, concurrency, onSetConcurrency, 
           : "faster-whisper: o mais rapido (ainda mais com GPU NVIDIA), mas exige Python 3.10+ e o pacote faster-whisper. Modelo = uma pasta no formato CTranslate2."}
           <br />A qualidade depende do <strong>tamanho do modelo</strong>: base &lt; small &lt; medium &lt; large-v3 (maior = melhor, porem mais lento).
         </p>
+        {form.backend === "faster_whisper" && (
+          <div className="dep-panel">
+            <div className="dep-row">
+              <button type="button" className="btn-mini" disabled={depBusy} onClick={checkDeps}>{depBusy ? <Loader size={13} className="spin" /> : <RefreshCw size={13} />} Verificar ambiente</button>
+              {dep && <>
+                <span className={"dep-chip " + (dep.python ? "dep-ok" : "dep-bad")}>{dep.python ? `Python: ${dep.python}` : "Python ausente"}</span>
+                <span className={"dep-chip " + (dep.fasterWhisper ? "dep-ok" : "dep-bad")}>faster-whisper {dep.fasterWhisper ? "OK" : "ausente"}</span>
+                <span className={"dep-chip " + (dep.cuda ? "dep-ok" : "dep-warn")}>CUDA {dep.cuda ? "OK" : "ausente"}</span>
+              </>}
+            </div>
+            <div className="dep-actions">
+              <button type="button" className="btn-mini" disabled={depBusy} onClick={() => installDeps(false)}><Download size={13} /> Instalar faster-whisper</button>
+              <button type="button" className="btn-mini" disabled={depBusy} onClick={() => installDeps(true)}><Download size={13} /> Instalar suporte GPU (CUDA)</button>
+            </div>
+            <p className="hint" style={{ margin: "4px 0 0" }}>Usa o <code>pip</code> do Python do seu PATH. Sem GPU/CUDA, o faster-whisper roda na CPU normalmente.</p>
+            {depLog && <pre className="dep-log">{depLog}</pre>}
+          </div>
+        )}
         <label className="field">Modelo ({form.backend === "faster_whisper" ? "pasta" : "arquivo"})<div className="field-row"><input type="text" value={form.modelPath} onChange={e => setForm({ ...form, modelPath: e.target.value })} placeholder={form.backend === "faster_whisper" ? "Pasta do modelo CTranslate2" : "Arquivo ggml .bin / .gguf"} /><button type="button" onClick={chooseModel}>{form.backend === "faster_whisper" ? <FolderOpen size={14} /> : "..."}</button></div></label>
         <label className="field">Dispositivo<div className="pill-group">
           <button type="button" className={"pill" + (form.device === "cpu" ? " pill-active" : "")} onClick={() => setForm({ ...form, device: "cpu" })}>CPU</button>
