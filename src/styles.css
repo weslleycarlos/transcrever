@@ -126,6 +126,15 @@ textarea { padding: 10px; min-height: 120px; resize: vertical; line-height: 1.55
 .settings-desc { font-size: 12px; color: #6b7280; line-height: 1.6; margin: 0 0 12px; }
 .settings-suggest { display: flex; align-items: center; gap: 10px; font-size: 12px; color: #475569; margin-top: 8px; flex-wrap: wrap; }
 
+/* Confidence */
+.conf-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; }
+.conf-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.conf-high { background: #dcfce7; color: #16a34a; }
+.conf-mid { background: #fef9c3; color: #a16207; }
+.conf-low { background: #fee2e2; color: #dc2626; }
+.seg-meta { display: flex; align-items: center; gap: 8px; }
+.seg-conf { font-size: 10px; font-weight: 700; padding: 0 5px; border-radius: 6px; }
+
 /* Dependencies panel */
 .dep-panel { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; background: #f9fafb; margin-bottom: 12px; }
 .dep-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
