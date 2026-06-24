@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   AlertCircle, ArrowLeft, BarChart3, Calendar, Check, Clock, Copy, Download, FileAudio,
-  FolderOpen, HardDrive, Home, ListVideo, Loader, Pencil, Play,
+  FolderOpen, HardDrive, Home, Layers, ListVideo, Loader, Pencil, Play,
   Plus, RefreshCw, Save, Search, Settings, Square, Trash2, X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -30,9 +30,12 @@ export default function App() {
   const [activeProfile, setActiveProfile] = useState<ProfileRow | null>(null);
   const [selectedJob, setSelectedJob] = useState<JobRow | null>(null);
   const [transcription, setTranscription] = useState<TranscriptionView | null>(null);
+  const [concurrency, setConcurrency] = useState(1);
   const canStart = queuedCount > 0 && activeProfile !== null && !isRunning;
 
-  useEffect(() => { loadProfiles(); loadActiveProfile(); return () => stopPolling(); }, []);
+  useEffect(() => { loadProfiles(); loadActiveProfile(); loadConcurrency(); return () => stopPolling(); }, []);
+  async function loadConcurrency() { try { setConcurrency(await invoke<number>("get_concurrency")); } catch { /* */ } }
+  async function handleSetConcurrency(value: number) { try { await invoke("set_concurrency", { value }); setConcurrency(value); } catch { /* */ } }
 
   const startPolling = useCallback(() => {
     if (pollingRef.current) return;
@@ -78,7 +81,7 @@ export default function App() {
         {nav === "home" && <HomeView source={source} setSource={setSource} destination={destination} setDestination={setDestination} message={message} setMessage={setMessage} queuedCount={queuedCount} setQueuedCount={setQueuedCount} isRunning={isRunning} canStart={canStart} onScan={handleScan} onStart={handleStart} />}
         {nav === "queue" && <QueueView stats={stats} jobs={jobs} message={message} isRunning={isRunning} stopping={stopping} canStart={canStart} onStart={handleStart} onStop={handleStop} onViewJob={handleViewJob} />}
         {nav === "review" && <ReviewView jobs={jobs} selectedJob={selectedJob} transcription={transcription} onViewJob={handleViewJob} onBack={() => { setSelectedJob(null); setTranscription(null); }} />}
-        {nav === "settings" && <SettingsView profiles={profiles} activeProfile={activeProfile} onProfilesChanged={() => { loadProfiles(); loadActiveProfile(); }} />}
+        {nav === "settings" && <SettingsView profiles={profiles} activeProfile={activeProfile} concurrency={concurrency} onSetConcurrency={handleSetConcurrency} onProfilesChanged={() => { loadProfiles(); loadActiveProfile(); }} />}
       </section>
     </main>
   );
@@ -539,14 +542,32 @@ function TranscriptionDetail({ transcription, onBack, onSaved }: { transcription
   );
 }
 
-function SettingsView({ profiles, activeProfile, onProfilesChanged }: { profiles: ProfileRow[]; activeProfile: ProfileRow | null; onProfilesChanged: () => void }) {
+function SettingsView({ profiles, activeProfile, concurrency, onSetConcurrency, onProfilesChanged }: { profiles: ProfileRow[]; activeProfile: ProfileRow | null; concurrency: number; onSetConcurrency: (n: number) => void; onProfilesChanged: () => void }) {
   const [form, setForm] = useState<ProfileRow>({ ...EMPTY_PROFILE });
+  const cores = typeof navigator !== "undefined" && navigator.hardwareConcurrency ? navigator.hardwareConcurrency : 0;
+  const threads = activeProfile?.threads || 4;
+  const isGpu = activeProfile?.device === "cuda";
+  const suggestion = isGpu ? 1 : Math.max(1, Math.min(8, Math.floor((cores || threads) / threads)));
   async function chooseModel() { try { if (form.backend === "faster_whisper") { const s = await open({ directory: true, multiple: false }); if (typeof s === "string") setForm(f => ({ ...f, modelPath: s })); } else { const s = await open({ multiple: false, filters: [{ name: "Modelo", extensions: ["bin", "ggml"] }] }); if (typeof s === "string") setForm(f => ({ ...f, modelPath: s })); } } catch { } }
   async function save() { if (!form.name.trim() || !form.modelPath.trim()) return; try { await invoke("save_profile", { profile: form }); onProfilesChanged(); setForm({ ...EMPTY_PROFILE }); } catch { } }
   async function select(p: ProfileRow) { try { await invoke("set_active_profile", { profile: p }); onProfilesChanged(); } catch { } }
   async function del(id: number) { try { await invoke("delete_profile", { id }); onProfilesChanged(); } catch { } }
   return (
     <div className="view settings-view"><h2>Configuracoes</h2>
+      <section className="card">
+        <h3><Layers size={14} /> Processamento da fila</h3>
+        <p className="settings-desc">Quantos arquivos transcrever ao mesmo tempo. Cada arquivo ja usa varias threads, entao o ideal e: <strong>threads x simultaneos ≈ nucleos da CPU</strong>.{cores ? ` Sua maquina reporta ${cores} nucleos.` : ""}</p>
+        <label className="field" style={{ maxWidth: 260 }}>Arquivos simultaneos
+          <select value={concurrency} onChange={e => onSetConcurrency(Number(e.target.value))}>
+            {[1, 2, 3, 4, 6, 8].map(n => <option key={n} value={n}>{n} {n === 1 ? "(sequencial)" : "em paralelo"}</option>)}
+          </select>
+        </label>
+        <div className="settings-suggest">
+          <span>Sugestao para o perfil ativo ({isGpu ? "GPU" : `${threads} threads`}): <strong>{suggestion}</strong></span>
+          {suggestion !== concurrency && <button type="button" className="btn-mini" onClick={() => onSetConcurrency(suggestion)}>Aplicar sugestao</button>}
+        </div>
+        {isGpu && <p className="hint">No modo CUDA, recomenda-se 1 por vez para nao esgotar a memoria da GPU.</p>}
+      </section>
       {profiles.length > 0 && <section className="card"><h3>Perfis salvos</h3><div className="profile-list">{profiles.map((p: ProfileRow) => (<div key={p.id} className={"profile-card" + (activeProfile?.id === p.id ? " profile-active" : "")}><div className="profile-card-info"><strong>{p.name} {activeProfile?.id === p.id && <Check size={12} />}</strong><span>{p.backend} · {p.device} · {p.threads} threads · {p.precision}</span><span className="profile-model-path">{p.modelPath}</span></div><div className="profile-card-actions">{activeProfile?.id !== p.id && <button type="button" onClick={() => select(p)}>Usar</button>}<button type="button" className="btn-danger" onClick={() => del(p.id)}><Trash2 size={14} /></button></div></div>))}</div></section>}
       <section className="card"><h3>Novo perfil</h3>
         <label className="field">Nome<input type="text" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Meu modelo" /></label>
