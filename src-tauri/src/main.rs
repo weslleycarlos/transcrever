@@ -48,11 +48,14 @@ fn main() {
             commands::get_active_profile,
             commands::set_active_profile,
             commands::start_transcription,
+            commands::stop_transcription,
             commands::list_jobs,
             commands::get_transcription,
             commands::read_audio,
             commands::search_transcriptions,
-            commands::list_transcriptions
+            commands::list_transcriptions,
+            commands::update_transcription,
+            commands::export_transcription
         ])
         .run(tauri::generate_context!())
         .expect("failed to run tauri app");

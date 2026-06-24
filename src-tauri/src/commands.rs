@@ -1,6 +1,9 @@
 use std::{
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use anyhow::Context;
@@ -17,6 +20,7 @@ pub struct AppState {
     pub selected_source: Arc<Mutex<Option<PathBuf>>>,
     pub selected_destination: Arc<Mutex<Option<PathBuf>>>,
     pub active_profile: Arc<Mutex<Option<db::ProfileRow>>>,
+    pub cancel_flag: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -59,6 +63,7 @@ impl AppState {
             selected_source: Arc::new(Mutex::new(None)),
             selected_destination: Arc::new(Mutex::new(None)),
             active_profile: Arc::new(Mutex::new(None)),
+            cancel_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -168,9 +173,14 @@ pub async fn start_transcription(state: State<'_, AppState>) -> Result<(), Strin
         .ok_or_else(|| "Nenhum perfil de transcricao ativo. Configure um perfil primeiro.".to_string())?;
 
     let pool = state.pool.clone();
+    let cancel = state.cancel_flag.clone();
+    cancel.store(false, Ordering::SeqCst);
 
     tauri::async_runtime::spawn(async move {
         loop {
+            if cancel.load(Ordering::SeqCst) {
+                break;
+            }
             let next = match db::find_next_pending_job(&pool).await {
                 Ok(Some(job)) => job,
                 Ok(None) => break,
@@ -235,6 +245,12 @@ pub async fn start_transcription(state: State<'_, AppState>) -> Result<(), Strin
         }
     });
 
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_transcription(state: State<'_, AppState>) -> Result<(), String> {
+    state.cancel_flag.store(true, Ordering::SeqCst);
     Ok(())
 }
 
@@ -405,6 +421,37 @@ pub async fn search_transcriptions(query: String, state: State<'_, AppState>) ->
 #[tauri::command]
 pub async fn list_transcriptions(state: State<'_, AppState>) -> Result<Vec<db::TranscriptionView>, String> {
     db::list_transcriptions(&state.pool).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_transcription(job_id: i64, edited_text: Option<String>, state: State<'_, AppState>) -> Result<(), String> {
+    let value = edited_text.filter(|t| !t.trim().is_empty());
+    db::update_transcription_text(&state.pool, job_id, value.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn export_transcription(job_id: i64, destination: String, state: State<'_, AppState>) -> Result<(), String> {
+    let view = db::get_transcription_by_job(&state.pool, job_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Transcricao nao encontrada".to_string())?;
+
+    let edited_segments: Vec<String> = view
+        .segments
+        .iter()
+        .map(|s| s.edited_text.clone().unwrap_or_else(|| s.raw_text.clone()))
+        .collect();
+
+    let text = crate::export::choose_export_text(
+        view.edited_text.as_deref(),
+        &edited_segments,
+        &view.raw_text,
+    );
+
+    crate::export::write_txt_export(std::path::Path::new(&destination), &text)
+        .map_err(|e| e.to_string())
 }
 
 fn mime_type(path: &str) -> &'static str {
