@@ -92,12 +92,19 @@ impl TranscriptionBackend for WhisperCppBackend {
             ));
         }
 
-        let json = fs::read_to_string(&output_json).with_context(|| {
-            format!(
-                "whisper.cpp did not produce expected JSON output {}",
-                output_json.display()
-            )
-        })?;
+        let json = match fs::read_to_string(&output_json) {
+            Ok(json) => json,
+            Err(_) => {
+                // Process exited 0 but wrote no JSON: usually an unreadable or
+                // empty audio (no decodable samples). Surface its own output.
+                let diagnostic = process_diagnostic(&output.stderr, &output.stdout);
+                return Err(anyhow!(
+                    "whisper.cpp nao gerou transcricao para {} (provavel audio vazio ou ilegivel): {}",
+                    media_path.display(),
+                    diagnostic
+                ));
+            }
+        };
         let _ = fs::remove_file(&output_json);
 
         parse_whisper_json(&json)

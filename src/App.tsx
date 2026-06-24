@@ -398,6 +398,19 @@ function ReviewView({ jobs, selectedJob, transcription, onViewJob, onBack }: any
 function FileCard({ transcription, onViewJob, jobs, query }: { transcription: TranscriptionView; onViewJob: (j: JobRow) => void; jobs: JobRow[]; query?: string }) {
   const [showSegments, setShowSegments] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [audioUrl, setAudioUrl] = useState("");
+  const [showAudio, setShowAudio] = useState(false);
+  const [loadingAudio, setLoadingAudio] = useState(false);
+  async function toggleAudio(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (showAudio) { setShowAudio(false); return; }
+    if (!audioUrl) {
+      setLoadingAudio(true);
+      try { setAudioUrl(await invoke<string>("read_audio", { path: transcription.absolutePath })); } catch { /* */ }
+      setLoadingAudio(false);
+    }
+    setShowAudio(true);
+  }
   const job = jobs.find(j => j.jobId === transcription.jobId);
   const dur = durationOf(transcription);
   const text = textOf(transcription);
@@ -425,6 +438,8 @@ function FileCard({ transcription, onViewJob, jobs, query }: { transcription: Tr
         <JobStatusBadge status="completed" />
       </div>
 
+      {showAudio && audioUrl && <audio className="fc-audio" controls autoPlay src={audioUrl} onClick={e => e.stopPropagation()} />}
+
       <div className="fc-text" onClick={() => setShowSegments(!showSegments)}>
         {highlight(preview, query)}
       </div>
@@ -445,6 +460,9 @@ function FileCard({ transcription, onViewJob, jobs, query }: { transcription: Tr
           {showSegments ? "Recolher segmentos" : `Ver ${transcription.segments.length} segmentos`}
         </button>
         <div className="fc-actions">
+          <button type="button" className="btn-mini" title="Ouvir audio" onClick={toggleAudio}>
+            {loadingAudio ? <Loader size={13} className="spin" /> : <Play size={13} />} {showAudio ? "Fechar" : "Ouvir"}
+          </button>
           <button type="button" className="btn-mini" title="Copiar texto"
             onClick={async (e) => { e.stopPropagation(); const ok = await copyToClipboard(text); setCopied(ok); setTimeout(() => setCopied(false), 1500); }}>
             {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? "Copiado" : "Copiar"}

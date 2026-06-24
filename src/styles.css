@@ -213,6 +213,7 @@ textarea { padding: 10px; min-height: 120px; resize: vertical; line-height: 1.55
 .fc-date { font-size: 11px; color: #94a3b8; }
 .fc-meta-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .fc-text { padding: 0 14px 12px; font-size: 13px; line-height: 1.6; color: #374151; white-space: pre-line; cursor: pointer; }
+.fc-audio { width: calc(100% - 28px); margin: 0 14px 10px; height: 38px; }
 .fc-text-full { font-size: 13px; line-height: 1.7; color: #374151; white-space: pre-line; background: #f9fafb; border-radius: 8px; padding: 14px; border: 1px solid #e5e7eb; }
 .fc-segments { padding: 0 14px 12px; display: flex; flex-direction: column; gap: 4px; }
 .btn-expand { border: none; background: none; color: #6366f1; font-size: 12px; font-weight: 500; cursor: pointer; padding: 4px 14px 10px; min-height: auto; }
