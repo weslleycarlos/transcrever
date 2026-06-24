@@ -20,6 +20,7 @@ pub struct DiscoveredMedia {
     pub extension: String,
     pub size_bytes: u64,
     pub modified_at: DateTime<Utc>,
+    pub created_at: Option<DateTime<Utc>>,
 }
 
 pub fn is_supported_media(path: &Path) -> bool {
@@ -67,6 +68,7 @@ pub fn scan_media(source_root: &Path) -> Result<Vec<DiscoveredMedia>> {
         let Ok(modified_at) = metadata.modified() else {
             continue;
         };
+        let created_at = metadata.created().ok().map(DateTime::<Utc>::from);
 
         discovered.push(DiscoveredMedia {
             source_root: source_root.clone(),
@@ -81,6 +83,7 @@ pub fn scan_media(source_root: &Path) -> Result<Vec<DiscoveredMedia>> {
                 .to_ascii_lowercase(),
             size_bytes: metadata.len(),
             modified_at: DateTime::<Utc>::from(modified_at),
+            created_at,
         });
     }
 

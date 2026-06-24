@@ -319,6 +319,11 @@ pub async fn read_audio(path: String) -> Result<String, String> {
     Ok(format!("data:{mime};base64,{b64}"))
 }
 
+#[tauri::command]
+pub async fn search_transcriptions(query: String, state: State<'_, AppState>) -> Result<Vec<db::TranscriptionView>, String> {
+    db::search_transcriptions(&state.pool, &query).await.map_err(|e| e.to_string())
+}
+
 fn mime_type(path: &str) -> &'static str {
     let ext = std::path::Path::new(path)
         .extension()

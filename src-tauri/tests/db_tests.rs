@@ -16,6 +16,7 @@ fn sample_media(file_name: &str, size_bytes: u64) -> DiscoveredMedia {
             .with_ymd_and_hms(2026, 6, 22, 0, 0, 0)
             .single()
             .expect("valid datetime"),
+        created_at: None,
     }
 }
 

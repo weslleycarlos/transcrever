@@ -75,6 +75,12 @@ export interface TranscriptionView {
   jobId: number;
   fileName: string;
   absolutePath: string;
+  relativePath: string;
+  extension: string;
+  sizeBytes: number;
+  durationMs?: number | null;
+  modifiedAt: string;
+  createdAt?: string | null;
   rawText: string;
   editedText?: string | null;
   segments: SegmentView[];

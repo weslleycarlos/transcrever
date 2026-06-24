@@ -68,13 +68,14 @@ pub async fn upsert_media_file(pool: &SqlitePool, media: &DiscoveredMedia) -> Re
     let absolute_path = media.absolute_path.to_string_lossy().into_owned();
     let relative_path = media.relative_path.to_string_lossy().into_owned();
     let modified_at = media.modified_at.to_rfc3339();
+    let created_at = media.created_at.map(|d| d.to_rfc3339());
     let discovered_at = Utc::now().to_rfc3339();
 
     sqlx::query(
         r#"
         INSERT OR IGNORE INTO media_files
-        (source_root, absolute_path, relative_path, file_name, extension, size_bytes, modified_at, discovered_at)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        (source_root, absolute_path, relative_path, file_name, extension, size_bytes, modified_at, created_at, discovered_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
         "#,
     )
     .bind(&source_root)
@@ -84,6 +85,7 @@ pub async fn upsert_media_file(pool: &SqlitePool, media: &DiscoveredMedia) -> Re
     .bind(&media.extension)
     .bind(size_bytes)
     .bind(&modified_at)
+    .bind(&created_at)
     .bind(discovered_at)
     .execute(pool)
     .await?;
@@ -339,6 +341,12 @@ pub struct TranscriptionView {
     pub job_id: i64,
     pub file_name: String,
     pub absolute_path: String,
+    pub relative_path: String,
+    pub extension: String,
+    pub size_bytes: i64,
+    pub duration_ms: Option<i64>,
+    pub modified_at: String,
+    pub created_at: Option<String>,
     pub raw_text: String,
     pub edited_text: Option<String>,
     pub segments: Vec<SegmentView>,
@@ -357,9 +365,10 @@ pub struct SegmentView {
 }
 
 pub async fn get_transcription_by_job(pool: &SqlitePool, job_id: i64) -> Result<Option<TranscriptionView>> {
-    let row = sqlx::query_as::<_, (i64, i64, i64, String, String, String, Option<String>)>(
+    let row = sqlx::query_as::<_, (i64, i64, i64, String, String, String, String, i64, Option<i64>, String, Option<String>, String, Option<String>)>(
         r#"
-        SELECT t.id, t.media_file_id, t.job_id, m.file_name, m.absolute_path, t.raw_text, t.edited_text
+        SELECT t.id, t.media_file_id, t.job_id, m.file_name, m.absolute_path, m.relative_path, m.extension,
+               m.size_bytes, m.duration_ms, m.modified_at, m.created_at, t.raw_text, t.edited_text
         FROM transcriptions t
         JOIN media_files m ON m.id = t.media_file_id
         WHERE t.job_id = ?1
@@ -369,7 +378,7 @@ pub async fn get_transcription_by_job(pool: &SqlitePool, job_id: i64) -> Result<
     .fetch_optional(pool)
     .await?;
 
-    let (transcription_id, media_file_id, jid, file_name, absolute_path, raw_text, edited_text) =
+    let (transcription_id, media_file_id, jid, file_name, absolute_path, relative_path, extension, size_bytes, duration_ms, modified_at, created_at, raw_text, edited_text) =
         match row {
             Some(r) => r,
             None => return Ok(None),
@@ -404,6 +413,12 @@ pub async fn get_transcription_by_job(pool: &SqlitePool, job_id: i64) -> Result<
         job_id: jid,
         file_name,
         absolute_path,
+        relative_path,
+        extension,
+        size_bytes,
+        duration_ms,
+        modified_at,
+        created_at,
         raw_text,
         edited_text,
         segments,
@@ -418,17 +433,79 @@ pub async fn count_profiles(pool: &SqlitePool) -> Result<i64> {
 }
 
 pub async fn create_default_profile(pool: &SqlitePool, model_path: &str) -> Result<i64> {
+    // Strip Windows extended-length path prefix if present
+    let clean_path = model_path
+        .strip_prefix(r"\\?\")
+        .unwrap_or(model_path);
+
     let profile = ProfileRow {
         id: 0,
         name: "Padrao (base.pt)".to_string(),
-        backend: "whisper_cpp".to_string(),
-        model_path: model_path.to_string(),
+        backend: "faster_whisper".to_string(),
+        model_path: clean_path.to_string(),
         device: "cpu".to_string(),
-        precision: "auto".to_string(),
+        precision: "float16".to_string(),
         threads: 4,
         language: Some("pt".to_string()),
         task: "transcribe".to_string(),
         advanced_json: "{}".to_string(),
     };
     save_profile(pool, &profile).await
+}
+
+pub async fn search_transcriptions(
+    pool: &SqlitePool,
+    text_query: &str,
+) -> Result<Vec<TranscriptionView>> {
+    let pattern = format!("%{}%", text_query);
+
+    let rows = sqlx::query_as::<_, (i64, i64, i64, String, String, String, String, i64, Option<i64>, String, Option<String>, String, Option<String>)>(
+        r#"
+        SELECT t.id, t.media_file_id, t.job_id, m.file_name, m.absolute_path, m.relative_path, m.extension,
+               m.size_bytes, m.duration_ms, m.modified_at, m.created_at, t.raw_text, t.edited_text
+        FROM transcriptions t
+        JOIN media_files m ON m.id = t.media_file_id
+        WHERE t.raw_text LIKE ?1 COLLATE NOCASE
+           OR m.file_name LIKE ?1 COLLATE NOCASE
+        ORDER BY t.id DESC
+        LIMIT 200
+        "#,
+    )
+    .bind(&pattern)
+    .fetch_all(pool)
+    .await?;
+
+    let mut results = Vec::with_capacity(rows.len());
+    for (tid, mid, jid, fname, apath, rpath, ext, sz, dur, mat, cat, raw, edited) in rows {
+        let segs = fetch_segments(pool, tid).await?;
+        results.push(TranscriptionView {
+            transcription_id: tid, media_file_id: mid, job_id: jid,
+            file_name: fname, absolute_path: apath, relative_path: rpath,
+            extension: ext, size_bytes: sz, duration_ms: dur,
+            modified_at: mat, created_at: cat,
+            raw_text: raw, edited_text: edited, segments: segs,
+        });
+    }
+    Ok(results)
+}
+
+async fn fetch_segments(pool: &SqlitePool, transcription_id: i64) -> Result<Vec<SegmentView>> {
+    let segments = sqlx::query_as::<_, (i64, i64, i64, i64, String, Option<String>, Option<f32>)>(
+        r#"
+        SELECT id, segment_index, start_ms, end_ms, raw_text, edited_text, confidence
+        FROM transcription_segments
+        WHERE transcription_id = ?1
+        ORDER BY segment_index
+        "#,
+    )
+    .bind(transcription_id)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|(id, idx, start_ms, end_ms, raw, edited, conf)| SegmentView {
+        id, segment_index: idx, start_ms, end_ms,
+        raw_text: raw, edited_text: edited, confidence: conf,
+    })
+    .collect();
+    Ok(segments)
 }

@@ -18,13 +18,14 @@ pub async fn enqueue_discovered_media(
         let absolute_path = media.absolute_path.to_string_lossy().into_owned();
         let relative_path = media.relative_path.to_string_lossy().into_owned();
         let modified_at = media.modified_at.to_rfc3339();
+        let created_at = media.created_at.map(|d| d.to_rfc3339());
         let discovered_at = Utc::now().to_rfc3339();
 
         sqlx::query(
             r#"
             INSERT OR IGNORE INTO media_files
-            (source_root, absolute_path, relative_path, file_name, extension, size_bytes, modified_at, discovered_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            (source_root, absolute_path, relative_path, file_name, extension, size_bytes, modified_at, created_at, discovered_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             "#,
         )
         .bind(&source_root)
@@ -34,6 +35,7 @@ pub async fn enqueue_discovered_media(
         .bind(&media.extension)
         .bind(size_bytes)
         .bind(&modified_at)
+        .bind(&created_at)
         .bind(discovered_at)
         .execute(&mut *tx)
         .await?;

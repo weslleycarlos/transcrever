@@ -15,31 +15,36 @@ fn main() {
             let database_path = app_data_dir.join("transcrever.sqlite");
             let pool = tauri::async_runtime::block_on(db::connect(&database_path))?;
 
-            // Create default profile on first run with bundled base.pt model
+            // Create default profile on first run
             let count = tauri::async_runtime::block_on(db::count_profiles(&pool))?;
             if count == 0 {
                 let resource_dir = app.path().resource_dir()?;
+                // The bundled model lives in resources/models/whisper/base.pt
+                // In dev mode this resolves to target/debug/models/whisper/base.pt
                 let model_path = resource_dir
                     .join("models")
                     .join("whisper")
                     .join("base.pt");
-                if model_path.exists() {
-                    let profile_id =
-                        tauri::async_runtime::block_on(db::create_default_profile(
-                            &pool,
-                            &model_path.to_string_lossy(),
-                        ))?;
-                    let profiles =
-                        tauri::async_runtime::block_on(db::list_profiles(&pool))?;
-                    if let Some(profile) = profiles.into_iter().find(|p| p.id == profile_id) {
-                        let state = AppState::new(pool.clone());
-                        *state.active_profile
-                            .lock()
-                            .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "lock"))? =
-                            Some(profile);
-                        app.manage(state);
-                        return Ok(());
-                    }
+
+                // Always create a default profile pointing to the bundled model path.
+                // If the model file doesn't exist (dev mode without running setup-model.ps1),
+                // the user can still use the app by going to Config and pointing to their
+                // own faster-whisper model directory.
+                let profile_id =
+                    tauri::async_runtime::block_on(db::create_default_profile(
+                        &pool,
+                        &model_path.to_string_lossy(),
+                    ))?;
+                let profiles =
+                    tauri::async_runtime::block_on(db::list_profiles(&pool))?;
+                if let Some(profile) = profiles.into_iter().find(|p| p.id == profile_id) {
+                    let state = AppState::new(pool.clone());
+                    *state.active_profile
+                        .lock()
+                        .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "lock"))? =
+                        Some(profile);
+                    app.manage(state);
+                    return Ok(());
                 }
             }
 
@@ -57,7 +62,8 @@ fn main() {
             commands::start_transcription,
             commands::list_jobs,
             commands::get_transcription,
-            commands::read_audio
+            commands::read_audio,
+            commands::search_transcriptions
         ])
         .run(tauri::generate_context!())
         .expect("failed to run tauri app");
