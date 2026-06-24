@@ -31,6 +31,9 @@ pub struct BackendSegment {
 pub struct BackendTranscription {
     pub raw_text: String,
     pub segments: Vec<BackendSegment>,
+    /// Device actually used (e.g. "cuda", "cpu"). None when not reported.
+    #[serde(default)]
+    pub device_used: Option<String>,
 }
 
 pub trait TranscriptionBackend {

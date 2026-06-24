@@ -245,12 +245,24 @@ pub async fn start_transcription(state: State<'_, AppState>) -> Result<(), Strin
                             .map(|s| (s.start_ms, s.end_ms, s.text.clone(), s.confidence))
                             .collect();
 
+                        let backend_label = if profile.backend == "faster_whisper" {
+                            "faster-whisper"
+                        } else {
+                            "whisper.cpp"
+                        };
+                        let device = transcription
+                            .device_used
+                            .clone()
+                            .unwrap_or_else(|| profile.device.clone());
+                        let engine = format!("{backend_label} · {device}");
+
                         match db::save_transcription(
                             &pool,
                             job_id,
                             media_file_id,
                             &transcription.raw_text,
                             &segments,
+                            Some(&engine),
                         )
                         .await
                         {

@@ -401,18 +401,20 @@ pub async fn save_transcription(
     media_file_id: i64,
     raw_text: &str,
     segments: &[(i64, i64, String, Option<f32>)],
+    engine: Option<&str>,
 ) -> Result<i64> {
     let now = Utc::now().to_rfc3339();
 
     let transcription_id = sqlx::query(
         r#"
-        INSERT INTO transcriptions (media_file_id, job_id, raw_text, created_at, updated_at)
-        VALUES (?1, ?2, ?3, ?4, ?5)
+        INSERT INTO transcriptions (media_file_id, job_id, raw_text, engine, created_at, updated_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
         "#,
     )
     .bind(media_file_id)
     .bind(job_id)
     .bind(raw_text)
+    .bind(engine)
     .bind(&now)
     .bind(&now)
     .execute(pool)
@@ -456,6 +458,7 @@ pub struct TranscriptionView {
     pub created_at: Option<String>,
     pub raw_text: String,
     pub edited_text: Option<String>,
+    pub engine: Option<String>,
     pub segments: Vec<SegmentView>,
 }
 
@@ -472,10 +475,10 @@ pub struct SegmentView {
 }
 
 pub async fn get_transcription_by_job(pool: &SqlitePool, job_id: i64) -> Result<Option<TranscriptionView>> {
-    let row = sqlx::query_as::<_, (i64, i64, i64, String, String, String, String, i64, Option<i64>, String, Option<String>, String, Option<String>)>(
+    let row = sqlx::query_as::<_, (i64, i64, i64, String, String, String, String, i64, Option<i64>, String, Option<String>, String, Option<String>, Option<String>)>(
         r#"
         SELECT t.id, t.media_file_id, t.job_id, m.file_name, m.absolute_path, m.relative_path, m.extension,
-               m.size_bytes, m.duration_ms, m.modified_at, m.created_at, t.raw_text, t.edited_text
+               m.size_bytes, m.duration_ms, m.modified_at, m.created_at, t.raw_text, t.edited_text, t.engine
         FROM transcriptions t
         JOIN media_files m ON m.id = t.media_file_id
         WHERE t.job_id = ?1
@@ -485,7 +488,7 @@ pub async fn get_transcription_by_job(pool: &SqlitePool, job_id: i64) -> Result<
     .fetch_optional(pool)
     .await?;
 
-    let (transcription_id, media_file_id, jid, file_name, absolute_path, relative_path, extension, size_bytes, duration_ms, modified_at, created_at, raw_text, edited_text) =
+    let (transcription_id, media_file_id, jid, file_name, absolute_path, relative_path, extension, size_bytes, duration_ms, modified_at, created_at, raw_text, edited_text, engine) =
         match row {
             Some(r) => r,
             None => return Ok(None),
@@ -528,6 +531,7 @@ pub async fn get_transcription_by_job(pool: &SqlitePool, job_id: i64) -> Result<
         created_at,
         raw_text,
         edited_text,
+        engine,
         segments,
     }))
 }
@@ -584,10 +588,10 @@ pub async fn create_default_profile(pool: &SqlitePool, model_path: &str) -> Resu
 }
 
 pub async fn list_transcriptions(pool: &SqlitePool) -> Result<Vec<TranscriptionView>> {
-    let rows = sqlx::query_as::<_, (i64, i64, i64, String, String, String, String, i64, Option<i64>, String, Option<String>, String, Option<String>)>(
+    let rows = sqlx::query_as::<_, (i64, i64, i64, String, String, String, String, i64, Option<i64>, String, Option<String>, String, Option<String>, Option<String>)>(
         r#"
         SELECT t.id, t.media_file_id, t.job_id, m.file_name, m.absolute_path, m.relative_path, m.extension,
-               m.size_bytes, m.duration_ms, m.modified_at, m.created_at, t.raw_text, t.edited_text
+               m.size_bytes, m.duration_ms, m.modified_at, m.created_at, t.raw_text, t.edited_text, t.engine
         FROM transcriptions t
         JOIN media_files m ON m.id = t.media_file_id
         ORDER BY t.id DESC
@@ -598,14 +602,14 @@ pub async fn list_transcriptions(pool: &SqlitePool) -> Result<Vec<TranscriptionV
     .await?;
 
     let mut results = Vec::with_capacity(rows.len());
-    for (tid, mid, jid, fname, apath, rpath, ext, sz, dur, mat, cat, raw, edited) in rows {
+    for (tid, mid, jid, fname, apath, rpath, ext, sz, dur, mat, cat, raw, edited, engine) in rows {
         let segs = fetch_segments(pool, tid).await?;
         results.push(TranscriptionView {
             transcription_id: tid, media_file_id: mid, job_id: jid,
             file_name: fname, absolute_path: apath, relative_path: rpath,
             extension: ext, size_bytes: sz, duration_ms: dur,
             modified_at: mat, created_at: cat,
-            raw_text: raw, edited_text: edited, segments: segs,
+            raw_text: raw, edited_text: edited, engine, segments: segs,
         });
     }
     Ok(results)
@@ -617,10 +621,10 @@ pub async fn search_transcriptions(
 ) -> Result<Vec<TranscriptionView>> {
     let pattern = format!("%{}%", text_query);
 
-    let rows = sqlx::query_as::<_, (i64, i64, i64, String, String, String, String, i64, Option<i64>, String, Option<String>, String, Option<String>)>(
+    let rows = sqlx::query_as::<_, (i64, i64, i64, String, String, String, String, i64, Option<i64>, String, Option<String>, String, Option<String>, Option<String>)>(
         r#"
         SELECT t.id, t.media_file_id, t.job_id, m.file_name, m.absolute_path, m.relative_path, m.extension,
-               m.size_bytes, m.duration_ms, m.modified_at, m.created_at, t.raw_text, t.edited_text
+               m.size_bytes, m.duration_ms, m.modified_at, m.created_at, t.raw_text, t.edited_text, t.engine
         FROM transcriptions t
         JOIN media_files m ON m.id = t.media_file_id
         WHERE t.raw_text LIKE ?1 COLLATE NOCASE
@@ -634,14 +638,14 @@ pub async fn search_transcriptions(
     .await?;
 
     let mut results = Vec::with_capacity(rows.len());
-    for (tid, mid, jid, fname, apath, rpath, ext, sz, dur, mat, cat, raw, edited) in rows {
+    for (tid, mid, jid, fname, apath, rpath, ext, sz, dur, mat, cat, raw, edited, engine) in rows {
         let segs = fetch_segments(pool, tid).await?;
         results.push(TranscriptionView {
             transcription_id: tid, media_file_id: mid, job_id: jid,
             file_name: fname, absolute_path: apath, relative_path: rpath,
             extension: ext, size_bytes: sz, duration_ms: dur,
             modified_at: mat, created_at: cat,
-            raw_text: raw, edited_text: edited, segments: segs,
+            raw_text: raw, edited_text: edited, engine, segments: segs,
         });
     }
     Ok(results)

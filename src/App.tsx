@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
-  AlertCircle, ArrowLeft, BarChart3, Calendar, Check, Clock, Copy, Download, FileAudio,
+  AlertCircle, ArrowLeft, BarChart3, Calendar, Check, Clock, Copy, Cpu, Download, FileAudio,
   FolderOpen, HardDrive, Home, Layers, ListVideo, Loader, Pencil, Play,
   Plus, RefreshCw, Save, Search, Settings, Square, Trash2, X,
 } from "lucide-react";
@@ -249,6 +249,15 @@ const fileConfidence = (t: TranscriptionView): number | null => {
 const confLevel = (c: number) => (c >= 0.7 ? "high" : c >= 0.5 ? "mid" : "low");
 const confPct = (c: number) => Math.round(c * 100);
 
+function EngineBadge({ engine }: { engine: string }) {
+  const gpu = /cuda|gpu/i.test(engine);
+  return (
+    <span className={"fc-tag engine-tag " + (gpu ? "engine-gpu" : "engine-cpu")} title={`Processado com ${engine}`}>
+      <Cpu size={11} /> {gpu ? "GPU" : "CPU"} · {engine.split("·")[0].trim()}
+    </span>
+  );
+}
+
 function ConfBadge({ value, label }: { value: number; label?: boolean }) {
   return (
     <span className={"conf-chip conf-" + confLevel(value)} title="Confianca media estimada da transcricao">
@@ -493,6 +502,7 @@ function FileCard({ transcription, onViewJob, jobs, query }: { transcription: Tr
             <span className="fc-tag"><HardDrive size={11} /> {fmtSize(transcription.sizeBytes)}</span>
             {dur > 0 && <span className="fc-tag"><Clock size={11} /> {fmtClock(dur)}</span>}
             {fileDate && <span className="fc-tag"><Calendar size={11} /> {fmtDate(fileDate)}</span>}
+            {transcription.engine && <EngineBadge engine={transcription.engine} />}
             {fconf != null && <ConfBadge value={fconf} />}
           </div>
         </div>
@@ -574,6 +584,7 @@ function TranscriptionDetail({ transcription, onBack, onSaved }: { transcription
         <span className="fc-tag"><HardDrive size={11} /> {fmtSize(transcription.sizeBytes)}</span>
         {dur > 0 && <span className="fc-tag"><Clock size={11} /> {fmtClock(dur)}</span>}
         {fileDate && <span className="fc-tag"><Calendar size={11} /> {fmtDate(fileDate)}</span>}
+        {transcription.engine && <EngineBadge engine={transcription.engine} />}
         {fconf != null && <ConfBadge value={fconf} label />}
       </div>
 

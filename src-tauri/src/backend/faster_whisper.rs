@@ -159,6 +159,8 @@ struct FasterWhisperOutput {
     segments: Vec<FasterWhisperSegment>,
     #[serde(default)]
     error: Option<String>,
+    #[serde(default)]
+    device_used: Option<String>,
 }
 
 fn parse_faster_whisper_json(json: &str) -> anyhow::Result<BackendTranscription> {
@@ -183,6 +185,7 @@ fn parse_faster_whisper_json(json: &str) -> anyhow::Result<BackendTranscription>
     Ok(BackendTranscription {
         raw_text: output.raw_text,
         segments,
+        device_used: output.device_used,
     })
 }
 
