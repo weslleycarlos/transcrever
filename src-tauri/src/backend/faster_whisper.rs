@@ -77,6 +77,9 @@ impl TranscriptionBackend for FasterWhisperBackend {
 
         let output = Command::new(&python)
             .args(&args)
+            // Avoid writing __pycache__ next to the script: it clutters the tree
+            // and, under `tauri dev`, the file watcher would restart the app.
+            .env("PYTHONDONTWRITEBYTECODE", "1")
             .output()
             .with_context(|| format!("failed to run {python} with faster-whisper script"))?;
 

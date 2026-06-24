@@ -1,0 +1,9 @@
+# Evita que o watcher do `tauri dev` reinicie o app por arquivos gerados
+# em tempo de execucao (cache do Python, modelos, WAVs temporarios, etc).
+**/__pycache__/
+**/*.pyc
+scripts/
+models/
+binaries/
+resources/
+*.wav
