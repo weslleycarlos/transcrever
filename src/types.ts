@@ -84,5 +84,6 @@ export interface TranscriptionView {
   createdAt?: string | null;
   rawText: string;
   editedText?: string | null;
+  engine?: string | null;
   segments: SegmentView[];
 }

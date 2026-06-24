@@ -194,7 +194,7 @@ pub(crate) fn parse_whisper_json(json: &str) -> anyhow::Result<BackendTranscript
         .collect::<Vec<_>>()
         .join("\n");
 
-    Ok(BackendTranscription { raw_text, segments })
+    Ok(BackendTranscription { raw_text, segments, device_used: None })
 }
 
 /// whisper.cpp `-oj` output includes integer-millisecond offsets under

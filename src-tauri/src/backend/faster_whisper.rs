@@ -77,6 +77,9 @@ impl TranscriptionBackend for FasterWhisperBackend {
 
         let output = Command::new(&python)
             .args(&args)
+            // Avoid writing __pycache__ next to the script: it clutters the tree
+            // and, under `tauri dev`, the file watcher would restart the app.
+            .env("PYTHONDONTWRITEBYTECODE", "1")
             .output()
             .with_context(|| format!("failed to run {python} with faster-whisper script"))?;
 
@@ -156,6 +159,8 @@ struct FasterWhisperOutput {
     segments: Vec<FasterWhisperSegment>,
     #[serde(default)]
     error: Option<String>,
+    #[serde(default)]
+    device_used: Option<String>,
 }
 
 fn parse_faster_whisper_json(json: &str) -> anyhow::Result<BackendTranscription> {
@@ -180,6 +185,7 @@ fn parse_faster_whisper_json(json: &str) -> anyhow::Result<BackendTranscription>
     Ok(BackendTranscription {
         raw_text: output.raw_text,
         segments,
+        device_used: output.device_used,
     })
 }
 
