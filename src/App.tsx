@@ -31,9 +31,11 @@ export default function App() {
   const [selectedJob, setSelectedJob] = useState<JobRow | null>(null);
   const [transcription, setTranscription] = useState<TranscriptionView | null>(null);
   const [concurrency, setConcurrency] = useState(1);
-  const canStart = queuedCount > 0 && activeProfile !== null && !isRunning;
+  const hasPending = useMemo(() => jobs.some(j => j.status === "pending"), [jobs]);
+  const canStart = (queuedCount > 0 || hasPending) && activeProfile !== null && !isRunning;
 
-  useEffect(() => { loadProfiles(); loadActiveProfile(); loadConcurrency(); return () => stopPolling(); }, []);
+  useEffect(() => { loadProfiles(); loadActiveProfile(); loadConcurrency(); loadJobs(); return () => stopPolling(); }, []);
+  async function loadJobs() { try { setJobs(await invoke<JobRow[]>("list_jobs")); } catch { /* */ } }
   async function loadConcurrency() { try { setConcurrency(await invoke<number>("get_concurrency")); } catch { /* */ } }
   async function handleSetConcurrency(value: number) { try { await invoke("set_concurrency", { value }); setConcurrency(value); } catch { /* */ } }
 
@@ -78,7 +80,7 @@ export default function App() {
         <div className="sidebar-footer">{activeProfile && <div className="sidebar-profile-badge"><Check size={12} /> {activeProfile.name}</div>}</div>
       </nav>
       <section className="workspace">
-        {nav === "home" && <HomeView source={source} setSource={setSource} destination={destination} setDestination={setDestination} message={message} setMessage={setMessage} queuedCount={queuedCount} setQueuedCount={setQueuedCount} isRunning={isRunning} canStart={canStart} onScan={handleScan} onStart={handleStart} />}
+        {nav === "home" && <HomeView source={source} setSource={setSource} destination={destination} setDestination={setDestination} message={message} setMessage={setMessage} queuedCount={queuedCount} setQueuedCount={setQueuedCount} isRunning={isRunning} canStart={canStart} onScan={handleScan} onStart={handleStart} pendingCount={stats.pending} completedCount={stats.completed} onGoQueue={() => setNav("queue")} />}
         {nav === "queue" && <QueueView stats={stats} jobs={jobs} message={message} isRunning={isRunning} stopping={stopping} canStart={canStart} onStart={handleStart} onStop={handleStop} onViewJob={handleViewJob} />}
         {nav === "review" && <ReviewView jobs={jobs} selectedJob={selectedJob} transcription={transcription} onViewJob={handleViewJob} onBack={() => { setSelectedJob(null); setTranscription(null); }} />}
         {nav === "settings" && <SettingsView profiles={profiles} activeProfile={activeProfile} concurrency={concurrency} onSetConcurrency={handleSetConcurrency} onProfilesChanged={() => { loadProfiles(); loadActiveProfile(); }} />}
@@ -96,13 +98,26 @@ function NavItem({ icon, label, active, onClick, badge }: { icon: React.ReactNod
   );
 }
 
-function HomeView({ source, setSource, destination, setDestination, message, setMessage, queuedCount, setQueuedCount, isRunning, canStart, onScan, onStart }: any) {
+function HomeView({ source, setSource, destination, setDestination, message, setMessage, queuedCount, setQueuedCount, isRunning, canStart, onScan, onStart, pendingCount, completedCount, onGoQueue }: any) {
   async function chooseSource() { const s = await open({ directory: true, multiple: false }); if (typeof s === "string") { setSource(s); setMessage("Pasta selecionada. Clique em Escanear."); } }
   async function chooseDest() { const s = await open({ directory: true, multiple: false }); if (typeof s === "string") { setDestination(s); try { await invoke("set_export_folder", { path: s }); } catch { } } }
   async function rescan() { if (!source) return; setMessage("Re-escaneando..."); try { const r = await invoke<ScanResponse>("scan_source_folder", { path: source }); setQueuedCount(r.queuedCount); setMessage(r.discoveredCount + " arquivos, " + r.queuedCount + " na fila."); } catch (e) { setMessage("Erro: " + formatError(e)); } }
   return (
     <div className="view home-view">
       <h2>Inicio</h2>
+      {(pendingCount > 0 || (queuedCount === 0 && completedCount > 0)) && (
+        <div className="resume-banner">
+          <div>
+            {pendingCount > 0
+              ? <><strong>{pendingCount}</strong> transcricao(oes) pendente(s) de antes.</>
+              : <><strong>{completedCount}</strong> transcricao(oes) ja concluida(s) neste computador.</>}
+          </div>
+          <div className="resume-actions">
+            {pendingCount > 0 && <button type="button" className="btn-start btn-start-sm" disabled={!canStart} onClick={onStart}><Play size={14} /> {isRunning ? "Processando..." : "Continuar"}</button>}
+            <button type="button" className="btn-ghost" onClick={onGoQueue}>Ver fila</button>
+          </div>
+        </div>
+      )}
       <div className="card">
         <label className="field">Pasta de origem<div className="field-row"><input type="text" readOnly value={source} placeholder="Nenhuma pasta" /><button type="button" onClick={chooseSource}><FolderOpen size={16} /></button></div></label>
         <div className="card-actions"><button type="button" disabled={!source} onClick={onScan}><Search size={14} /> Escanear</button><button type="button" disabled={!source} onClick={rescan}><RefreshCw size={14} /> Re-escanear</button></div>
@@ -123,14 +138,20 @@ const QUEUE_FILTERS: { key: string; label: string }[] = [
   { key: "error", label: "Erros" },
 ];
 
+const folderName = (p: string) => p ? p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p : p;
+
 function QueueView({ stats, jobs, message, isRunning, stopping, canStart, onStart, onStop, onViewJob }: any) {
   const [page, setPage] = useState(1);
   const [filter, setFilter] = useState("all");
-  const filtered = useMemo(() => filter === "all" ? jobs : jobs.filter((j: JobRow) => j.status === filter), [jobs, filter]);
+  const [project, setProject] = useState("all");
+  const projects = useMemo(() => Array.from(new Set((jobs as JobRow[]).map(j => j.sourceRoot).filter(Boolean))), [jobs]);
+  const filtered = useMemo(() => (jobs as JobRow[]).filter(j =>
+    (filter === "all" || j.status === filter) && (project === "all" || j.sourceRoot === project)
+  ), [jobs, filter, project]);
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const current = Math.min(page, pageCount);
   const pageJobs = filtered.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE);
-  useEffect(() => { setPage(1); }, [filter, filtered.length]);
+  useEffect(() => { setPage(1); }, [filter, project, filtered.length]);
   return (
     <div className="view queue-view"><h2>Fila</h2>
       <div className="stats-grid">
@@ -147,6 +168,12 @@ function QueueView({ stats, jobs, message, isRunning, stopping, canStart, onStar
         {isRunning
           ? <button type="button" className="btn-stop" disabled={stopping} onClick={onStop}><Square size={13} /> {stopping ? "Interrompendo..." : "Parar"}</button>
           : stats.pending > 0 && <button type="button" className="btn-start btn-start-sm" disabled={!canStart} onClick={onStart}><Play size={14} /> Retomar</button>}
+        {projects.length > 1 && (
+          <select value={project} onChange={e => setProject(e.target.value)} title="Projeto (pasta de origem)">
+            <option value="all">Todos os projetos</option>
+            {projects.map(p => <option key={p} value={p}>{folderName(p)}</option>)}
+          </select>
+        )}
         <div className="queue-filters">
           {QUEUE_FILTERS.map(f => {
             const count = f.key === "all" ? stats.total : f.key === "processing" ? stats.processing : f.key === "pending" ? stats.pending : f.key === "completed" ? stats.completed : stats.errors;

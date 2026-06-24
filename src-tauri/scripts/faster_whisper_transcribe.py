@@ -190,7 +190,7 @@ def main():
     parser.add_argument("--audio", required=True, help="Audio file path")
     parser.add_argument("--device", default="cpu", choices=["cpu", "cuda", "auto"])
     parser.add_argument("--compute-type", default="auto",
-                        choices=["auto", "float16", "int8_float16", "int8", "int8_bfloat16"])
+                        choices=["auto", "float32", "float16", "int8_float16", "int8", "int8_bfloat16"])
     parser.add_argument("--language", default=None, help="Language code (pt, en, etc.)")
     parser.add_argument("--task", default="transcribe", choices=["transcribe", "translate"])
     parser.add_argument("--threads", type=int, default=4)
