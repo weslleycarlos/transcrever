@@ -137,7 +137,18 @@ pub async fn save_profile(profile: db::ProfileRow, state: State<'_, AppState>) -
         .map_err(|e| e.to_string())?;
 
     let saved = db::ProfileRow { id, ..profile };
-    *state.active_profile.lock().map_err(|e| e.to_string())? = Some(saved.clone());
+    // Keep the active profile in sync only when creating the first profile or
+    // editing the one that is currently active.
+    {
+        let mut active = state.active_profile.lock().map_err(|e| e.to_string())?;
+        let should_set = match active.as_ref() {
+            None => true,
+            Some(current) => current.id == saved.id,
+        };
+        if should_set {
+            *active = Some(saved.clone());
+        }
+    }
     Ok(saved)
 }
 

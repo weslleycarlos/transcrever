@@ -398,6 +398,19 @@ function ReviewView({ jobs, selectedJob, transcription, onViewJob, onBack }: any
 function FileCard({ transcription, onViewJob, jobs, query }: { transcription: TranscriptionView; onViewJob: (j: JobRow) => void; jobs: JobRow[]; query?: string }) {
   const [showSegments, setShowSegments] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [audioUrl, setAudioUrl] = useState("");
+  const [showAudio, setShowAudio] = useState(false);
+  const [loadingAudio, setLoadingAudio] = useState(false);
+  async function toggleAudio(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (showAudio) { setShowAudio(false); return; }
+    if (!audioUrl) {
+      setLoadingAudio(true);
+      try { setAudioUrl(await invoke<string>("read_audio", { path: transcription.absolutePath })); } catch { /* */ }
+      setLoadingAudio(false);
+    }
+    setShowAudio(true);
+  }
   const job = jobs.find(j => j.jobId === transcription.jobId);
   const dur = durationOf(transcription);
   const text = textOf(transcription);
@@ -425,6 +438,8 @@ function FileCard({ transcription, onViewJob, jobs, query }: { transcription: Tr
         <JobStatusBadge status="completed" />
       </div>
 
+      {showAudio && audioUrl && <audio className="fc-audio" controls autoPlay src={audioUrl} onClick={e => e.stopPropagation()} />}
+
       <div className="fc-text" onClick={() => setShowSegments(!showSegments)}>
         {highlight(preview, query)}
       </div>
@@ -445,6 +460,9 @@ function FileCard({ transcription, onViewJob, jobs, query }: { transcription: Tr
           {showSegments ? "Recolher segmentos" : `Ver ${transcription.segments.length} segmentos`}
         </button>
         <div className="fc-actions">
+          <button type="button" className="btn-mini" title="Ouvir audio" onClick={toggleAudio}>
+            {loadingAudio ? <Loader size={13} className="spin" /> : <Play size={13} />} {showAudio ? "Fechar" : "Ouvir"}
+          </button>
           <button type="button" className="btn-mini" title="Copiar texto"
             onClick={async (e) => { e.stopPropagation(); const ok = await copyToClipboard(text); setCopied(ok); setTimeout(() => setCopied(false), 1500); }}>
             {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? "Copiado" : "Copiar"}
@@ -548,10 +566,24 @@ function SettingsView({ profiles, activeProfile, concurrency, onSetConcurrency, 
   const threads = activeProfile?.threads || 4;
   const isGpu = activeProfile?.device === "cuda";
   const suggestion = isGpu ? 1 : Math.max(1, Math.min(8, Math.floor((cores || threads) / threads)));
-  async function chooseModel() { try { if (form.backend === "faster_whisper") { const s = await open({ directory: true, multiple: false }); if (typeof s === "string") setForm(f => ({ ...f, modelPath: s })); } else { const s = await open({ multiple: false, filters: [{ name: "Modelo", extensions: ["bin", "ggml"] }] }); if (typeof s === "string") setForm(f => ({ ...f, modelPath: s })); } } catch { } }
+  const editing = form.id > 0;
+  async function chooseModel() {
+    try {
+      if (form.backend === "faster_whisper") {
+        const s = await open({ directory: true, multiple: false });
+        if (typeof s === "string") setForm(f => ({ ...f, modelPath: s }));
+      } else {
+        const s = await open({ multiple: false, filters: [
+          { name: "Modelos Whisper", extensions: ["bin", "ggml", "gguf", "pt", "pth"] },
+          { name: "Todos os arquivos", extensions: ["*"] },
+        ] });
+        if (typeof s === "string") setForm(f => ({ ...f, modelPath: s }));
+      }
+    } catch { }
+  }
   async function save() { if (!form.name.trim() || !form.modelPath.trim()) return; try { await invoke("save_profile", { profile: form }); onProfilesChanged(); setForm({ ...EMPTY_PROFILE }); } catch { } }
   async function select(p: ProfileRow) { try { await invoke("set_active_profile", { profile: p }); onProfilesChanged(); } catch { } }
-  async function del(id: number) { try { await invoke("delete_profile", { id }); onProfilesChanged(); } catch { } }
+  async function del(id: number) { try { await invoke("delete_profile", { id }); onProfilesChanged(); if (form.id === id) setForm({ ...EMPTY_PROFILE }); } catch { } }
   return (
     <div className="view settings-view"><h2>Configuracoes</h2>
       <section className="card">
@@ -568,19 +600,39 @@ function SettingsView({ profiles, activeProfile, concurrency, onSetConcurrency, 
         </div>
         {isGpu && <p className="hint">No modo CUDA, recomenda-se 1 por vez para nao esgotar a memoria da GPU.</p>}
       </section>
-      {profiles.length > 0 && <section className="card"><h3>Perfis salvos</h3><div className="profile-list">{profiles.map((p: ProfileRow) => (<div key={p.id} className={"profile-card" + (activeProfile?.id === p.id ? " profile-active" : "")}><div className="profile-card-info"><strong>{p.name} {activeProfile?.id === p.id && <Check size={12} />}</strong><span>{p.backend} · {p.device} · {p.threads} threads · {p.precision}</span><span className="profile-model-path">{p.modelPath}</span></div><div className="profile-card-actions">{activeProfile?.id !== p.id && <button type="button" onClick={() => select(p)}>Usar</button>}<button type="button" className="btn-danger" onClick={() => del(p.id)}><Trash2 size={14} /></button></div></div>))}</div></section>}
-      <section className="card"><h3>Novo perfil</h3>
+      {profiles.length > 0 && <section className="card"><h3>Perfis salvos</h3><div className="profile-list">{profiles.map((p: ProfileRow) => (<div key={p.id} className={"profile-card" + (activeProfile?.id === p.id ? " profile-active" : "")}><div className="profile-card-info"><strong>{p.name} {activeProfile?.id === p.id && <Check size={12} />}</strong><span>{p.backend} · {p.device} · {p.threads} threads · {p.precision}</span><span className="profile-model-path">{p.modelPath}</span></div><div className="profile-card-actions">{activeProfile?.id !== p.id && <button type="button" onClick={() => select(p)}>Usar</button>}<button type="button" onClick={() => setForm({ ...p })}><Pencil size={13} /></button><button type="button" className="btn-danger" onClick={() => del(p.id)}><Trash2 size={14} /></button></div></div>))}</div></section>}
+      <section className="card"><h3>{editing ? `Editar perfil: ${form.name || "(sem nome)"}` : "Novo perfil"}</h3>
         <label className="field">Nome<input type="text" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Meu modelo" /></label>
-        <label className="field">Backend<div className="pill-group"><button type="button" className={"pill" + (form.backend === "faster_whisper" ? " pill-active" : "")} onClick={() => setForm({ ...form, backend: "faster_whisper" })}>faster-whisper</button><button type="button" className={"pill" + (form.backend === "whisper_cpp" ? " pill-active" : "")} onClick={() => setForm({ ...form, backend: "whisper_cpp" })}>whisper.cpp</button></div></label>
-        <label className="field">Modelo<div className="field-row"><input type="text" value={form.modelPath} onChange={e => setForm({ ...form, modelPath: e.target.value })} placeholder={form.backend === "faster_whisper" ? "Pasta do modelo CTranslate2" : "Arquivo .bin"} /><button type="button" onClick={chooseModel}>...</button></div></label>
-        <label className="field">Dispositivo<div className="pill-group"><button type="button" className={"pill" + (form.device === "cpu" ? " pill-active" : "")} onClick={() => setForm({ ...form, device: "cpu" })}>CPU</button><button type="button" className={"pill" + (form.device === "cuda" ? " pill-active" : "")} onClick={() => setForm({ ...form, device: "cuda" })}>CUDA</button><button type="button" className={"pill" + (form.device === "auto" ? " pill-active" : "")} onClick={() => setForm({ ...form, device: "auto" })}>Auto</button></div></label>
+        <label className="field">Backend<div className="pill-group">
+          <button type="button" className={"pill" + (form.backend === "faster_whisper" ? " pill-active" : "")} onClick={() => setForm(f => ({ ...f, backend: "faster_whisper", device: f.device === "gpu" ? "cuda" : f.device }))}>faster-whisper</button>
+          <button type="button" className={"pill" + (form.backend === "whisper_cpp" ? " pill-active" : "")} onClick={() => setForm(f => ({ ...f, backend: "whisper_cpp", device: f.device === "cuda" ? "gpu" : f.device, precision: "auto" }))}>whisper.cpp</button>
+        </div></label>
+        <p className="settings-desc">{form.backend === "whisper_cpp"
+          ? "whisper.cpp: nao precisa de Python (binario embarcado). Modelo = um arquivo ggml/gguf (.bin). A precisao ja vem definida no arquivo do modelo."
+          : "faster-whisper: o mais rapido (ainda mais com GPU NVIDIA), mas exige Python 3.10+ e o pacote faster-whisper. Modelo = uma pasta no formato CTranslate2."}
+          <br />A qualidade depende do <strong>tamanho do modelo</strong>: base &lt; small &lt; medium &lt; large-v3 (maior = melhor, porem mais lento).
+        </p>
+        <label className="field">Modelo ({form.backend === "faster_whisper" ? "pasta" : "arquivo"})<div className="field-row"><input type="text" value={form.modelPath} onChange={e => setForm({ ...form, modelPath: e.target.value })} placeholder={form.backend === "faster_whisper" ? "Pasta do modelo CTranslate2" : "Arquivo ggml .bin / .gguf"} /><button type="button" onClick={chooseModel}>{form.backend === "faster_whisper" ? <FolderOpen size={14} /> : "..."}</button></div></label>
+        <label className="field">Dispositivo<div className="pill-group">
+          <button type="button" className={"pill" + (form.device === "cpu" ? " pill-active" : "")} onClick={() => setForm({ ...form, device: "cpu" })}>CPU</button>
+          {form.backend === "faster_whisper"
+            ? <button type="button" className={"pill" + (form.device === "cuda" ? " pill-active" : "")} onClick={() => setForm({ ...form, device: "cuda" })}>CUDA</button>
+            : <button type="button" className={"pill" + (form.device === "gpu" ? " pill-active" : "")} onClick={() => setForm({ ...form, device: "gpu" })}>GPU</button>}
+          <button type="button" className={"pill" + (form.device === "auto" ? " pill-active" : "")} onClick={() => setForm({ ...form, device: "auto" })}>Auto</button>
+        </div></label>
         <div className="field-grid">
-          <label className="field">Precisao<select value={form.precision} onChange={e => setForm({ ...form, precision: e.target.value })}><option value="auto">Auto - o modelo decide</option><option value="float16">FP16 - melhor GPU</option><option value="int8_float16">INT8 FP16 - equilibrado</option><option value="int8">INT8 - pouca memoria</option></select></label>
+          <label className="field">Precisao{form.backend === "whisper_cpp"
+            ? <input type="text" value="Definida pelo modelo" disabled title="No whisper.cpp a precisao/quantizacao ja vem no arquivo do modelo" />
+            : <select value={form.precision} onChange={e => setForm({ ...form, precision: e.target.value })}><option value="auto">Auto - o modelo decide</option><option value="float16">FP16 - melhor GPU</option><option value="int8_float16">INT8 FP16 - equilibrado</option><option value="int8">INT8 - pouca memoria</option></select>}
+          </label>
           <label className="field">Threads<select value={form.threads} onChange={e => setForm({ ...form, threads: Number(e.target.value) })}>{[1, 2, 4, 6, 8, 12, 16, 24, 32].map(n => <option key={n} value={n}>{n} threads</option>)}</select></label>
           <label className="field">Idioma<input type="text" value={form.language ?? ""} onChange={e => setForm({ ...form, language: e.target.value || null })} placeholder="pt / en / auto" /></label>
           <label className="field">Tarefa<select value={form.task} onChange={e => setForm({ ...form, task: e.target.value })}><option value="transcribe">Transcrever</option><option value="translate">Traduzir</option></select></label>
         </div>
-        <button type="button" className="btn-save" onClick={save}><Plus size={14} /> Salvar perfil</button>
+        <div className="card-actions">
+          <button type="button" className="btn-save" onClick={save}>{editing ? <><Save size={14} /> Salvar alteracoes</> : <><Plus size={14} /> Salvar perfil</>}</button>
+          {editing && <button type="button" onClick={() => setForm({ ...EMPTY_PROFILE })}>Cancelar</button>}
+        </div>
       </section>
     </div>
   );
