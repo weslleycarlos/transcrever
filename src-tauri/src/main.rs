@@ -15,6 +15,19 @@ fn main() {
             let database_path = app_data_dir.join("transcrever.sqlite");
             let pool = tauri::async_runtime::block_on(db::connect(&database_path))?;
 
+            let state = AppState::new(pool.clone());
+
+            // Restore the persisted concurrency setting (defaults to 1).
+            if let Ok(Some(value)) =
+                tauri::async_runtime::block_on(db::get_setting(&pool, "concurrency"))
+            {
+                if let Ok(parsed) = value.parse::<usize>() {
+                    state
+                        .concurrency
+                        .store(parsed.clamp(1, 16), std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+
             // Create default profile on first run with bundled model + binary
             let count = tauri::async_runtime::block_on(db::count_profiles(&pool))?;
             if count == 0 {
@@ -27,16 +40,13 @@ fn main() {
                 )?;
                 let profiles = tauri::async_runtime::block_on(db::list_profiles(&pool))?;
                 if let Some(profile) = profiles.into_iter().find(|p| p.id == profile_id) {
-                    let state = AppState::new(pool.clone());
                     *state.active_profile.lock().map_err(|_| {
                         std::io::Error::new(std::io::ErrorKind::Other, "lock")
                     })? = Some(profile);
-                    app.manage(state);
-                    return Ok(());
                 }
             }
 
-            app.manage(AppState::new(pool));
+            app.manage(state);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -49,6 +59,8 @@ fn main() {
             commands::set_active_profile,
             commands::start_transcription,
             commands::stop_transcription,
+            commands::get_concurrency,
+            commands::set_concurrency,
             commands::list_jobs,
             commands::get_transcription,
             commands::read_audio,

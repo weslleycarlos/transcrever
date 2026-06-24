@@ -1,7 +1,7 @@
 use std::{
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
     },
 };
@@ -21,6 +21,8 @@ pub struct AppState {
     pub selected_destination: Arc<Mutex<Option<PathBuf>>>,
     pub active_profile: Arc<Mutex<Option<db::ProfileRow>>>,
     pub cancel_flag: Arc<AtomicBool>,
+    pub running: Arc<AtomicBool>,
+    pub concurrency: Arc<AtomicUsize>,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -64,6 +66,8 @@ impl AppState {
             selected_destination: Arc::new(Mutex::new(None)),
             active_profile: Arc::new(Mutex::new(None)),
             cancel_flag: Arc::new(AtomicBool::new(false)),
+            running: Arc::new(AtomicBool::new(false)),
+            concurrency: Arc::new(AtomicUsize::new(1)),
         }
     }
 
@@ -172,78 +176,114 @@ pub async fn start_transcription(state: State<'_, AppState>) -> Result<(), Strin
         .clone()
         .ok_or_else(|| "Nenhum perfil de transcricao ativo. Configure um perfil primeiro.".to_string())?;
 
-    let pool = state.pool.clone();
+    if state.running.swap(true, Ordering::SeqCst) {
+        return Ok(()); // already running
+    }
+
     let cancel = state.cancel_flag.clone();
     cancel.store(false, Ordering::SeqCst);
+    let workers = state.concurrency.load(Ordering::SeqCst).max(1);
+    let running = state.running.clone();
+    let active = Arc::new(AtomicUsize::new(workers));
 
-    tauri::async_runtime::spawn(async move {
-        loop {
-            if cancel.load(Ordering::SeqCst) {
-                break;
-            }
-            let next = match db::find_next_pending_job(&pool).await {
-                Ok(Some(job)) => job,
-                Ok(None) => break,
-                Err(e) => {
-                    eprintln!("erro ao buscar proximo job: {e}");
+    for _ in 0..workers {
+        let pool = state.pool.clone();
+        let profile = profile.clone();
+        let cancel = cancel.clone();
+        let running = running.clone();
+        let active = active.clone();
+
+        tauri::async_runtime::spawn(async move {
+            loop {
+                if cancel.load(Ordering::SeqCst) {
                     break;
                 }
-            };
-
-            let (job_id, media_file_id, absolute_path) = next;
-            let media_path = std::path::PathBuf::from(&absolute_path);
-
-            let _ = db::update_job_status(&pool, job_id, JobStatus::Processing, 0.0, None).await;
-
-            let result = run_transcription(&media_path, &profile);
-            match result {
-                Ok(transcription) => {
-                    let segments: Vec<(i64, i64, String, Option<f32>)> = transcription
-                        .segments
-                        .iter()
-                        .map(|s| (s.start_ms, s.end_ms, s.text.clone(), s.confidence))
-                        .collect();
-
-                    match db::save_transcription(
-                        &pool,
-                        job_id,
-                        media_file_id,
-                        &transcription.raw_text,
-                        &segments,
-                    )
-                    .await
-                    {
-                        Ok(_) => {
-                            let _ = db::update_job_status(
-                                &pool, job_id, JobStatus::Completed, 1.0, None,
-                            )
-                            .await;
-                        }
-                        Err(e) => {
-                            let _ = db::update_job_status(
-                                &pool,
-                                job_id,
-                                JobStatus::Error,
-                                0.0,
-                                Some(&format!("erro ao salvar transcricao: {e}")),
-                            )
-                            .await;
+                let claimed = match db::claim_next_pending_job(&pool).await {
+                    Ok(Some(job)) => job,
+                    Ok(None) => {
+                        // No row claimed: either the queue is empty or another
+                        // worker won the race. Stop only when nothing remains.
+                        match db::count_pending_jobs(&pool).await {
+                            Ok(0) => break,
+                            Ok(_) => continue,
+                            Err(_) => break,
                         }
                     }
-                }
-                Err(e) => {
-                    let _ = db::update_job_status(
-                        &pool,
-                        job_id,
-                        JobStatus::Error,
-                        0.0,
-                        Some(&e.to_string()),
-                    )
-                    .await;
+                    Err(e) => {
+                        eprintln!("erro ao reservar proximo job: {e}");
+                        break;
+                    }
+                };
+
+                let (job_id, media_file_id, absolute_path) = claimed;
+                let media_path = std::path::PathBuf::from(&absolute_path);
+                let job_profile = profile.clone();
+
+                let result = tauri::async_runtime::spawn_blocking(move || {
+                    run_transcription(&media_path, &job_profile)
+                })
+                .await;
+
+                match result {
+                    Ok(Ok(transcription)) => {
+                        let segments: Vec<(i64, i64, String, Option<f32>)> = transcription
+                            .segments
+                            .iter()
+                            .map(|s| (s.start_ms, s.end_ms, s.text.clone(), s.confidence))
+                            .collect();
+
+                        match db::save_transcription(
+                            &pool,
+                            job_id,
+                            media_file_id,
+                            &transcription.raw_text,
+                            &segments,
+                        )
+                        .await
+                        {
+                            Ok(_) => {
+                                let _ = db::update_job_status(
+                                    &pool, job_id, JobStatus::Completed, 1.0, None,
+                                )
+                                .await;
+                            }
+                            Err(e) => {
+                                let _ = db::update_job_status(
+                                    &pool,
+                                    job_id,
+                                    JobStatus::Error,
+                                    0.0,
+                                    Some(&format!("erro ao salvar transcricao: {e}")),
+                                )
+                                .await;
+                            }
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        let _ = db::update_job_status(
+                            &pool, job_id, JobStatus::Error, 0.0, Some(&e.to_string()),
+                        )
+                        .await;
+                    }
+                    Err(e) => {
+                        let _ = db::update_job_status(
+                            &pool,
+                            job_id,
+                            JobStatus::Error,
+                            0.0,
+                            Some(&format!("worker falhou: {e}")),
+                        )
+                        .await;
+                    }
                 }
             }
-        }
-    });
+
+            // Last worker out clears the running flag.
+            if active.fetch_sub(1, Ordering::SeqCst) == 1 {
+                running.store(false, Ordering::SeqCst);
+            }
+        });
+    }
 
     Ok(())
 }
@@ -252,6 +292,20 @@ pub async fn start_transcription(state: State<'_, AppState>) -> Result<(), Strin
 pub async fn stop_transcription(state: State<'_, AppState>) -> Result<(), String> {
     state.cancel_flag.store(true, Ordering::SeqCst);
     Ok(())
+}
+
+#[tauri::command]
+pub async fn get_concurrency(state: State<'_, AppState>) -> Result<usize, String> {
+    Ok(state.concurrency.load(Ordering::SeqCst).max(1))
+}
+
+#[tauri::command]
+pub async fn set_concurrency(value: usize, state: State<'_, AppState>) -> Result<(), String> {
+    let clamped = value.clamp(1, 16);
+    state.concurrency.store(clamped, Ordering::SeqCst);
+    db::set_setting(&state.pool, "concurrency", &clamped.to_string())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 fn run_transcription(

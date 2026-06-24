@@ -121,6 +121,11 @@ textarea { padding: 10px; min-height: 120px; resize: vertical; line-height: 1.55
 .profile-card-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .btn-danger { border-color: #fecaca; color: #dc2626; }
 
+/* Settings: concurrency */
+.settings-view .card h3 { display: flex; align-items: center; gap: 6px; }
+.settings-desc { font-size: 12px; color: #6b7280; line-height: 1.6; margin: 0 0 12px; }
+.settings-suggest { display: flex; align-items: center; gap: 10px; font-size: 12px; color: #475569; margin-top: 8px; flex-wrap: wrap; }
+
 /* Pills */
 .pill-group { display: flex; gap: 4px; }
 .pill { border: 1px solid #d1d5db; background: #fff; color: #6b7280; border-radius: 20px; padding: 5px 14px; font-size: 12px; font-weight: 500; min-height: 30px; cursor: pointer; }

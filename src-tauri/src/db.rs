@@ -271,6 +271,73 @@ pub async fn list_all_jobs(pool: &SqlitePool) -> Result<Vec<JobWithMedia>> {
     Ok(rows)
 }
 
+pub async fn get_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>> {
+    let row: Option<(String,)> = sqlx::query_as("SELECT value FROM app_settings WHERE key = ?1")
+        .bind(key)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|r| r.0))
+}
+
+pub async fn set_setting(pool: &SqlitePool, key: &str, value: &str) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        "#,
+    )
+    .bind(key)
+    .bind(value)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn count_pending_jobs(pool: &SqlitePool) -> Result<i64> {
+    let row: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM transcription_jobs WHERE status = 'pending'",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
+}
+
+/// Atomically claims the next pending job, marking it as `processing`.
+///
+/// The `AND status = 'pending'` guard in the UPDATE ensures that, with several
+/// concurrent workers, exactly one claims a given row. Returns the job id, media
+/// file id and absolute path, or `None` if nothing was claimed (no pending job
+/// or the row was claimed by another worker between select and update).
+pub async fn claim_next_pending_job(pool: &SqlitePool) -> Result<Option<(i64, i64, String)>> {
+    let now = Utc::now().to_rfc3339();
+    let claimed: Option<(i64, i64)> = sqlx::query_as(
+        r#"
+        UPDATE transcription_jobs
+        SET status = 'processing',
+            progress = 0,
+            started_at = CASE WHEN started_at IS NULL THEN ?1 ELSE started_at END
+        WHERE id = (SELECT id FROM transcription_jobs WHERE status = 'pending' ORDER BY id LIMIT 1)
+          AND status = 'pending'
+        RETURNING id, media_file_id
+        "#,
+    )
+    .bind(&now)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some((job_id, media_file_id)) = claimed else {
+        return Ok(None);
+    };
+
+    let path: (String,) =
+        sqlx::query_as("SELECT absolute_path FROM media_files WHERE id = ?1")
+            .bind(media_file_id)
+            .fetch_one(pool)
+            .await?;
+
+    Ok(Some((job_id, media_file_id, path.0)))
+}
+
 pub async fn find_next_pending_job(pool: &SqlitePool) -> Result<Option<(i64, i64, String)>> {
     let row = sqlx::query_as::<_, (i64, i64, String)>(
         r#"
