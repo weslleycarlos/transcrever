@@ -402,6 +402,11 @@ pub async fn search_transcriptions(query: String, state: State<'_, AppState>) ->
     db::search_transcriptions(&state.pool, &query).await.map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn list_transcriptions(state: State<'_, AppState>) -> Result<Vec<db::TranscriptionView>, String> {
+    db::list_transcriptions(&state.pool).await.map_err(|e| e.to_string())
+}
+
 fn mime_type(path: &str) -> &'static str {
     let ext = std::path::Path::new(path)
         .extension()

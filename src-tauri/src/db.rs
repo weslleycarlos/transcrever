@@ -453,6 +453,34 @@ pub async fn create_default_profile(pool: &SqlitePool, model_path: &str) -> Resu
     save_profile(pool, &profile).await
 }
 
+pub async fn list_transcriptions(pool: &SqlitePool) -> Result<Vec<TranscriptionView>> {
+    let rows = sqlx::query_as::<_, (i64, i64, i64, String, String, String, String, i64, Option<i64>, String, Option<String>, String, Option<String>)>(
+        r#"
+        SELECT t.id, t.media_file_id, t.job_id, m.file_name, m.absolute_path, m.relative_path, m.extension,
+               m.size_bytes, m.duration_ms, m.modified_at, m.created_at, t.raw_text, t.edited_text
+        FROM transcriptions t
+        JOIN media_files m ON m.id = t.media_file_id
+        ORDER BY t.id DESC
+        LIMIT 1000
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut results = Vec::with_capacity(rows.len());
+    for (tid, mid, jid, fname, apath, rpath, ext, sz, dur, mat, cat, raw, edited) in rows {
+        let segs = fetch_segments(pool, tid).await?;
+        results.push(TranscriptionView {
+            transcription_id: tid, media_file_id: mid, job_id: jid,
+            file_name: fname, absolute_path: apath, relative_path: rpath,
+            extension: ext, size_bytes: sz, duration_ms: dur,
+            modified_at: mat, created_at: cat,
+            raw_text: raw, edited_text: edited, segments: segs,
+        });
+    }
+    Ok(results)
+}
+
 pub async fn search_transcriptions(
     pool: &SqlitePool,
     text_query: &str,

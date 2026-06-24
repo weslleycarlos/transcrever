@@ -1,9 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
-  AlertCircle, ArrowLeft, Check, Clock, Download, FileAudio,
-  FolderOpen, Home, Layers, ListVideo, Loader, Pencil, Play,
-  Plus, RefreshCw, Search, Settings, Trash2,
+  AlertCircle, ArrowLeft, BarChart3, Calendar, Check, Clock, Download, FileAudio,
+  FolderOpen, HardDrive, Home, ListVideo, Loader, Pencil, Play,
+  Plus, RefreshCw, Search, Settings, Trash2, X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { JobRow, ProfileRow, ScanResponse, TranscriptionView } from "./types";
@@ -126,120 +126,203 @@ function StatCard({ icon, label, value, color }: { icon: React.ReactNode; label:
   return <div className={"stat-card stat-" + color}><div className="stat-icon">{icon}</div><div className="stat-value">{value}</div><div className="stat-label">{label}</div></div>;
 }
 
-function ReviewView({ jobs, selectedJob, transcription, onViewJob, onBack }: any) {
-  const [search, setSearch] = useState("");
-  const [searchResults, setSearchResults] = useState<TranscriptionView[] | null>(null);
-  const completed = jobs.filter((j: JobRow) => j.status === "completed");
+// Shared formatting helpers
+const fmtClock = (ms: number) => { const total = Math.floor(ms / 1000); const h = Math.floor(total / 3600); const m = Math.floor((total % 3600) / 60); const s = total % 60; const mm = String(m).padStart(2, "0"); const ss = String(s).padStart(2, "0"); return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`; };
+const fmtDate = (d: string | null | undefined) => { if (!d) return ""; try { return new Date(d).toLocaleDateString("pt-BR") + " " + new Date(d).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }); } catch { return d; } };
+const fmtSize = (b: number) => { if (b < 1024) return b + " B"; if (b < 1048576) return (b / 1024).toFixed(1) + " KB"; return (b / 1048576).toFixed(1) + " MB"; };
+const durationOf = (t: TranscriptionView) => t.durationMs ?? (t.segments.length ? t.segments[t.segments.length - 1].endMs : 0);
+const fileDateOf = (t: TranscriptionView) => t.createdAt || t.modifiedAt;
+const textOf = (t: TranscriptionView) => (t.editedText?.trim() || t.rawText);
 
-  async function handleSearch() {
-    if (!search.trim()) { setSearchResults(null); return; }
-    try { setSearchResults(await invoke<TranscriptionView[]>("search_transcriptions", { query: search })); } catch { }
-  }
+// Portuguese stopwords (also filters words with <= 4 letters at call site)
+const STOPWORDS = new Set([
+  "que", "para", "como", "mais", "mas", "foi", "ele", "ela", "isso", "esse", "essa",
+  "este", "esta", "uma", "umas", "uns", "com", "sem", "por", "dos", "das", "nos", "nas",
+  "aos", "pelo", "pela", "seu", "sua", "meu", "minha", "voce", "vocs", "voces", "entao",
+  "tambem", "ainda", "quando", "porque", "depois", "sobre", "muito", "muita", "todos",
+  "todas", "tudo", "nao", "sim", "aqui", "agora", "tem", "ter", "ser", "estar", "deste",
+  "desta", "nesse", "nessa", "aquele", "aquela", "qual", "quem", "onde", "assim", "cada",
+]);
+
+function ReviewView({ jobs, selectedJob, transcription, onViewJob, onBack }: any) {
+  const [items, setItems] = useState<TranscriptionView[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [ext, setExt] = useState("");
+  const [sort, setSort] = useState("recent");
+  const [minSize, setMinSize] = useState(0);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { setItems(await invoke<TranscriptionView[]>("list_transcriptions")); }
+    catch { setItems([]); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load, jobs.length]);
+
+  const extensions = useMemo(() => Array.from(new Set(items.map(t => t.extension.toLowerCase()))).sort(), [items]);
+
+  const topWords = useMemo(() => {
+    const freq: Record<string, number> = {};
+    for (const t of items) {
+      for (const w of textOf(t).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").split(/[^a-z0-9]+/)) {
+        if (w.length > 4 && !STOPWORDS.has(w)) freq[w] = (freq[w] || 0) + 1;
+      }
+    }
+    return Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  }, [items]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    let list = items.filter(t => {
+      if (ext && t.extension.toLowerCase() !== ext) return false;
+      if (minSize && t.sizeBytes < minSize) return false;
+      if (q && !textOf(t).toLowerCase().includes(q) && !t.fileName.toLowerCase().includes(q)) return false;
+      return true;
+    });
+    const dateVal = (t: TranscriptionView) => { const d = fileDateOf(t); return d ? new Date(d).getTime() : 0; };
+    list = [...list].sort((a, b) => {
+      switch (sort) {
+        case "oldest": return dateVal(a) - dateVal(b);
+        case "name": return a.fileName.localeCompare(b.fileName);
+        case "size": return b.sizeBytes - a.sizeBytes;
+        case "duration": return durationOf(b) - durationOf(a);
+        default: return dateVal(b) - dateVal(a);
+      }
+    });
+    return list;
+  }, [items, search, ext, minSize, sort]);
+
+  const summary = useMemo(() => ({
+    count: items.length,
+    duration: items.reduce((acc, t) => acc + durationOf(t), 0),
+    size: items.reduce((acc, t) => acc + t.sizeBytes, 0),
+  }), [items]);
 
   if (selectedJob && transcription) return <TranscriptionDetail transcription={transcription} onBack={onBack} />;
 
-  const display = searchResults ?? completed.map((j: JobRow) => ({ jobId: j.jobId, fileName: j.fileName, relativePath: j.relativePath })) as any[];
-
-  const topWords = useMemo(() => {
-    if (!searchResults || searchResults.length === 0) return [];
-    const all = searchResults.map(t => t.rawText).join(" ").toLowerCase().split(/\s+/).filter(w => w.length > 4);
-    const freq: Record<string, number> = {};
-    for (const w of all) { freq[w] = (freq[w] || 0) + 1; }
-    return Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  }, [searchResults]);
+  const hasFilters = !!(search || ext || minSize);
 
   return (
     <div className="view review-view">
-      <h2>Revisao</h2>
-      <div className="field"><div className="field-row">
-        <input type="text" placeholder="Buscar em todas as transcricoes..."
-          value={search} onChange={e => setSearch(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter") handleSearch(); }} />
-        <button type="button" onClick={handleSearch}><Search size={14} /> Buscar</button>
-      </div></div>
+      <div className="review-head">
+        <h2>Revisao</h2>
+        <button type="button" className="btn-ghost" onClick={load}><RefreshCw size={14} /> Atualizar</button>
+      </div>
+
+      {!loading && items.length > 0 && (
+        <div className="review-summary">
+          <div className="rs-card"><FileAudio size={16} /><div><strong>{summary.count}</strong><span>Transcricoes</span></div></div>
+          <div className="rs-card"><Clock size={16} /><div><strong>{fmtClock(summary.duration)}</strong><span>Duracao total</span></div></div>
+          <div className="rs-card"><HardDrive size={16} /><div><strong>{fmtSize(summary.size)}</strong><span>Tamanho total</span></div></div>
+        </div>
+      )}
 
       {topWords.length > 0 && (
-        <div className="top-words">
-          <span className="top-label">Top palavras:</span>
-          {topWords.map(([word, count]) => (
-            <span key={word} className="word-chip" onClick={() => { setSearch(word); handleSearch(); }}>
-              {word} <small>{count}</small>
-            </span>
-          ))}
+        <div className="card top-words-card">
+          <h3><BarChart3 size={14} /> Top 10 palavras mais identificadas</h3>
+          <div className="top-words">
+            {topWords.map(([word, count]) => (
+              <button type="button" key={word} className="word-chip" onClick={() => setSearch(word)}>
+                {word} <small>{count}</small>
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
-      {searchResults ? (
-        searchResults.length === 0 ? <p className="empty-hint">Nenhum resultado.</p> :
-        <div className="review-cards">
-          {searchResults.map((t: TranscriptionView) => (
-            <FileCard key={t.transcriptionId} transcription={t} onViewJob={onViewJob} jobs={jobs} />
-          ))}
+      <div className="review-toolbar">
+        <div className="field-row tb-search">
+          <Search size={15} className="tb-search-icon" />
+          <input type="text" placeholder="Buscar texto em todas as transcricoes..."
+            value={search} onChange={e => setSearch(e.target.value)} />
+          {search && <button type="button" className="tb-clear" onClick={() => setSearch("")}><X size={14} /></button>}
         </div>
-      ) : (
-        completed.length === 0 ? <p className="empty-hint">Nenhuma transcricao concluida.</p> :
-        <div className="review-cards">
-          {completed.map((job: JobRow) => (
-            <div key={job.jobId} className="file-card-mini" onClick={() => onViewJob(job)} role="button" tabIndex={0}
-              onKeyDown={e => { if (e.key === "Enter") onViewJob(job); }}>
-              <div className="fcm-info"><span className="fcm-name">{job.fileName}</span><span className="fcm-path">{job.relativePath}</span></div>
-              <JobStatusBadge status="completed" />
-            </div>
-          ))}
+        <select value={ext} onChange={e => setExt(e.target.value)} title="Formato">
+          <option value="">Todos formatos</option>
+          {extensions.map(x => <option key={x} value={x}>{x.toUpperCase()}</option>)}
+        </select>
+        <select value={String(minSize)} onChange={e => setMinSize(Number(e.target.value))} title="Tamanho minimo">
+          <option value="0">Qualquer tamanho</option>
+          <option value={String(1048576)}>&gt; 1 MB</option>
+          <option value={String(5242880)}>&gt; 5 MB</option>
+          <option value={String(10485760)}>&gt; 10 MB</option>
+        </select>
+        <select value={sort} onChange={e => setSort(e.target.value)} title="Ordenar">
+          <option value="recent">Mais recentes</option>
+          <option value="oldest">Mais antigos</option>
+          <option value="name">Nome (A-Z)</option>
+          <option value="size">Maior tamanho</option>
+          <option value="duration">Maior duracao</option>
+        </select>
+      </div>
+
+      {hasFilters && (
+        <div className="review-count">{filtered.length} de {items.length} resultado(s)
+          <button type="button" className="btn-link" onClick={() => { setSearch(""); setExt(""); setMinSize(0); }}>limpar filtros</button>
         </div>
       )}
+
+      {loading ? <p className="empty-hint">Carregando...</p> :
+        items.length === 0 ? <p className="empty-hint">Nenhuma transcricao concluida.</p> :
+        filtered.length === 0 ? <p className="empty-hint">Nenhum resultado para os filtros aplicados.</p> :
+        <div className="review-cards">
+          {filtered.map(t => (
+            <FileCard key={t.transcriptionId} transcription={t} onViewJob={onViewJob} jobs={jobs} query={search.trim()} />
+          ))}
+        </div>}
     </div>
   );
 }
 
-function FileCard({ transcription, onViewJob, jobs }: { transcription: TranscriptionView; onViewJob: (j: JobRow) => void; jobs: JobRow[] }) {
+function FileCard({ transcription, onViewJob, jobs, query }: { transcription: TranscriptionView; onViewJob: (j: JobRow) => void; jobs: JobRow[]; query?: string }) {
   const [showSegments, setShowSegments] = useState(false);
   const job = jobs.find(j => j.jobId === transcription.jobId);
-  const fmt = (ms: number) => { const m = Math.floor(ms / 60000); const s = Math.floor((ms % 60000) / 1000); return String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0"); };
-  const fmtDate = (d: string | null | undefined) => { if (!d) return ""; try { return new Date(d).toLocaleDateString("pt-BR") + " " + new Date(d).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }); } catch { return d; } };
-  const fmtSize = (b: number) => { if (b < 1024) return b + " B"; if (b < 1048576) return (b / 1024).toFixed(1) + " KB"; return (b / 1048576).toFixed(1) + " MB"; };
-  const durStr = transcription.durationMs ? fmt(transcription.durationMs) : "";
-  const text = transcription.editedText?.trim() || transcription.rawText;
-  const highlight = (t: string, q: string) => { if (!q) return t; const re = new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, "gi"); const parts = t.split(re); return parts.map((p, i) => re.test(p) ? <mark key={i}>{p}</mark> : p); };
+  const dur = durationOf(transcription);
+  const text = textOf(transcription);
+  const fileDate = fileDateOf(transcription);
+  const highlight = (t: string, q?: string) => {
+    if (!q) return t;
+    const re = new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
+    return t.split(re).map((p, i) => (i % 2 === 1 ? <mark key={i}>{p}</mark> : p));
+  };
+  const preview = text.length > 400 && !showSegments ? text.slice(0, 400) + "..." : text;
 
   return (
     <div className="file-card">
       <div className="fc-header" onClick={() => { if (job) onViewJob(job); }} role="button" tabIndex={0}
         onKeyDown={e => { if (e.key === "Enter" && job) onViewJob(job); }}>
         <div className="fc-meta">
-          <span className="fc-name" title={transcription.fileName}>{transcription.fileName}</span>
+          <span className="fc-name" title={transcription.relativePath}>{transcription.fileName}</span>
           <div className="fc-tags">
-            <span className="fc-tag">{fmtSize(transcription.sizeBytes)}</span>
-            {durStr && <span className="fc-tag">{durStr}</span>}
             <span className="fc-tag">{transcription.extension.toUpperCase()}</span>
+            <span className="fc-tag"><HardDrive size={11} /> {fmtSize(transcription.sizeBytes)}</span>
+            {dur > 0 && <span className="fc-tag"><Clock size={11} /> {fmtClock(dur)}</span>}
+            {fileDate && <span className="fc-tag"><Calendar size={11} /> {fmtDate(fileDate)}</span>}
           </div>
-          {(transcription.createdAt || transcription.modifiedAt) && (
-            <span className="fc-date">Data: {fmtDate(transcription.createdAt || transcription.modifiedAt)}</span>
-          )}
         </div>
         <JobStatusBadge status="completed" />
       </div>
 
       <div className="fc-text" onClick={() => setShowSegments(!showSegments)}>
-        {text.length > 400 && !showSegments ? text.slice(0, 400) + "..." : text}
+        {highlight(preview, query)}
       </div>
 
       {showSegments && transcription.segments.length > 0 && (
         <div className="fc-segments">
           {transcription.segments.map(seg => (
             <div key={seg.id} className="segment-row">
-              <span className="seg-time">{fmt(seg.startMs)} - {fmt(seg.endMs)}</span>
-              <strong>{seg.rawText}</strong>
+              <span className="seg-time">{fmtClock(seg.startMs)} - {fmtClock(seg.endMs)}</span>
+              <strong>{highlight(seg.editedText?.trim() || seg.rawText, query)}</strong>
             </div>
           ))}
         </div>
       )}
 
-      {text.length > 400 && (
-        <button type="button" className="btn-expand" onClick={() => setShowSegments(!showSegments)}>
-          {showSegments ? "Recolher" : "Ver segmentos"}
-        </button>
-      )}
+      <button type="button" className="btn-expand" onClick={() => setShowSegments(!showSegments)}>
+        {showSegments ? "Recolher segmentos" : `Ver ${transcription.segments.length} segmentos`}
+      </button>
     </div>
   );
 }
@@ -247,11 +330,9 @@ function FileCard({ transcription, onViewJob, jobs }: { transcription: Transcrip
 function TranscriptionDetail({ transcription, onBack }: { transcription: TranscriptionView; onBack: () => void }) {
   const [search, setSearch] = useState(""); const [audioUrl, setAudioUrl] = useState("");
   const [showSegments, setShowSegments] = useState(false);
-  const text = transcription.editedText?.trim() || transcription.rawText;
-  const fmt = (ms: number) => { const m = Math.floor(ms / 60000); const s = Math.floor((ms % 60000) / 1000); return String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0"); };
-  const fmtDate = (d: string | null | undefined) => { if (!d) return ""; try { return new Date(d).toLocaleDateString("pt-BR") + " " + new Date(d).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }); } catch { return d; } };
-  const fmtSize = (b: number) => { if (b < 1024) return b + " B"; if (b < 1048576) return (b / 1024).toFixed(1) + " KB"; return (b / 1048576).toFixed(1) + " MB"; };
-  const durStr = transcription.durationMs ? fmt(transcription.durationMs) : "";
+  const text = textOf(transcription);
+  const dur = durationOf(transcription);
+  const fileDate = fileDateOf(transcription);
 
   useEffect(() => {
     invoke<string>("read_audio", { path: transcription.absolutePath }).then(setAudioUrl).catch(() => {});
@@ -263,12 +344,10 @@ function TranscriptionDetail({ transcription, onBack }: { transcription: Transcr
       <h2>{transcription.fileName}</h2>
 
       <div className="fc-meta-bar">
-        <span className="fc-tag">{fmtSize(transcription.sizeBytes)}</span>
-        {durStr && <span className="fc-tag">{durStr}</span>}
         <span className="fc-tag">{transcription.extension.toUpperCase()}</span>
-        {(transcription.createdAt || transcription.modifiedAt) && (
-          <span className="fc-date">Data: {fmtDate(transcription.createdAt || transcription.modifiedAt)}</span>
-        )}
+        <span className="fc-tag"><HardDrive size={11} /> {fmtSize(transcription.sizeBytes)}</span>
+        {dur > 0 && <span className="fc-tag"><Clock size={11} /> {fmtClock(dur)}</span>}
+        {fileDate && <span className="fc-tag"><Calendar size={11} /> {fmtDate(fileDate)}</span>}
       </div>
 
       <div className="field" style={{ margin: "10px 0" }}>
@@ -291,7 +370,7 @@ function TranscriptionDetail({ transcription, onBack }: { transcription: Transcr
           {(search.trim() ? transcription.segments.filter(s => s.rawText.toLowerCase().includes(search.toLowerCase())) : transcription.segments)
             .map(seg => (
               <div key={seg.id} className="segment-row">
-                <span className="seg-time">{fmt(seg.startMs)} - {fmt(seg.endMs)}</span>
+                <span className="seg-time">{fmtClock(seg.startMs)} - {fmtClock(seg.endMs)}</span>
                 <strong>{seg.rawText}</strong>
               </div>
             ))}
