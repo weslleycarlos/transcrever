@@ -117,12 +117,19 @@ export default function App() {
 
   async function chooseModelPath() {
     try {
-      const selected = await open({
-        multiple: false,
-        filters: [{ name: "Modelo", extensions: ["bin", "ggml"] }],
-      });
-      if (typeof selected === "string") {
-        setProfile((p) => ({ ...p, modelPath: selected }));
+      if (profile.backend === "faster_whisper") {
+        const selected = await open({ directory: true, multiple: false });
+        if (typeof selected === "string") {
+          setProfile((p) => ({ ...p, modelPath: selected }));
+        }
+      } else {
+        const selected = await open({
+          multiple: false,
+          filters: [{ name: "Modelo", extensions: ["bin", "ggml"] }],
+        });
+        if (typeof selected === "string") {
+          setProfile((p) => ({ ...p, modelPath: selected }));
+        }
       }
     } catch {
       // user cancelled

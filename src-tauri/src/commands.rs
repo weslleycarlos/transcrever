@@ -241,8 +241,10 @@ fn run_transcription(
     media_path: &std::path::Path,
     profile: &db::ProfileRow,
 ) -> anyhow::Result<crate::backend::BackendTranscription> {
+    let model_path = resolve_model_path(&profile.model_path, &profile.backend);
+
     let profile_config = TranscriptionProfile {
-        model_path: profile.model_path.clone(),
+        model_path,
         device: profile.device.clone(),
         precision: profile.precision.clone(),
         threads: profile.threads as usize,
@@ -269,6 +271,29 @@ fn run_transcription(
             backend.transcribe(media_path, &profile_config)
         }
     }
+}
+
+/// Resolves the model path for the given backend.
+///
+/// whisper.cpp expects a `.bin` file path.
+/// faster-whisper expects a **directory** containing CTranslate2 model files.
+/// If the user accidentally points to `model.bin` for faster-whisper, we use the parent directory.
+fn resolve_model_path(raw: &str, backend: &str) -> String {
+    if backend != "faster_whisper" {
+        return raw.to_string();
+    }
+
+    let path = std::path::Path::new(raw);
+
+    // If it points to a file (likely model.bin), use the parent directory
+    if path.is_file() {
+        if let Some(parent) = path.parent() {
+            return parent.to_string_lossy().to_string();
+        }
+    }
+
+    // If it's already a directory, use as-is
+    raw.to_string()
 }
 
 #[tauri::command]

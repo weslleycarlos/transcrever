@@ -12,6 +12,23 @@ import sys
 import time
 
 
+def resolve_model_path(raw: str) -> str:
+    """Resolve model path for faster-whisper.
+
+    faster-whisper expects a directory containing CTranslate2 model files
+    (e.g., model.bin, config.json). If the user points to a file inside
+    the directory, use the parent directory instead.
+    """
+    import os
+
+    path = raw
+    # If it's a file (e.g. .../model.bin), use parent directory
+    if os.path.isfile(path):
+        path = os.path.dirname(path)
+
+    return path
+
+
 def transcribe(
     model_path: str,
     audio_path: str,
@@ -34,9 +51,10 @@ def transcribe(
     if language == "" or language is None:
         language = None
 
+    model_dir = resolve_model_path(model_path)
     start = time.monotonic()
     model = WhisperModel(
-        model_path,
+        model_dir,
         device=device,
         compute_type=compute_type,
         num_workers=threads,
