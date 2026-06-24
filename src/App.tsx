@@ -63,7 +63,7 @@ export default function App() {
         <NavItem icon={<Home size={18} />} label="Inicio" active={nav === "home"} onClick={() => setNav("home")} />
         <NavItem icon={<ListVideo size={18} />} label="Fila" active={nav === "queue"} onClick={() => setNav("queue")} badge={jobs.length || undefined} />
         <NavItem icon={<Pencil size={18} />} label="Revisao" active={nav === "review"} onClick={() => setNav("review")} badge={stats.completed || undefined} />
-        <NavItem icon={<Settings size={18} />} label="Config" active={nav === "settings"} onClick={() => setNav("settings")} />
+        <NavItem icon={<Settings size={18} />} label="Configuracoes" active={nav === "settings"} onClick={() => setNav("settings")} />
         <div className="sidebar-footer">{activeProfile && <div className="sidebar-profile-badge"><Check size={12} /> {activeProfile.name}</div>}</div>
       </nav>
       <section className="workspace">
@@ -98,12 +98,19 @@ function HomeView({ source, setSource, destination, setDestination, message, set
       </div>
       <div className="card"><label className="field">Pasta de destino<div className="field-row"><input type="text" readOnly value={destination} placeholder="Opcional" /><button type="button" onClick={chooseDest}><Download size={16} /></button></div></label></div>
       {message && <div className="queue-summary">{message}</div>}
-      {queuedCount > 0 && <div className="card card-start"><div className="start-info"><FileAudio size={20} /><span><strong>{queuedCount}</strong> arquivos prontos</span></div><button type="button" className="btn-start" disabled={!canStart} onClick={onStart}><Play size={16} /> {isRunning ? "Processando..." : "Iniciar transcricao"}</button>{!canStart && <p className="hint">Configure um perfil em <strong>Config</strong>.</p>}</div>}
+      {queuedCount > 0 && <div className="card card-start"><div className="start-info"><FileAudio size={20} /><span><strong>{queuedCount}</strong> arquivos prontos</span></div><button type="button" className="btn-start" disabled={!canStart} onClick={onStart}><Play size={16} /> {isRunning ? "Processando..." : "Iniciar transcricao"}</button>{!canStart && <p className="hint">Configure um perfil em <strong>Configuracoes</strong>.</p>}</div>}
     </div>
   );
 }
 
+const PAGE_SIZE = 25;
+
 function QueueView({ stats, jobs, message, isRunning, canStart, onStart, onViewJob }: any) {
+  const [page, setPage] = useState(1);
+  const pageCount = Math.max(1, Math.ceil(jobs.length / PAGE_SIZE));
+  const current = Math.min(page, pageCount);
+  const pageJobs = jobs.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE);
+  useEffect(() => { setPage(1); }, [jobs.length]);
   return (
     <div className="view queue-view"><h2>Fila</h2>
       <div className="stats-grid">
@@ -116,7 +123,8 @@ function QueueView({ stats, jobs, message, isRunning, canStart, onStart, onViewJ
       {stats.total > 0 && <div className="progress-bar-container"><div className="progress-bar" style={{ width: stats.progress + "%" }} /></div>}
       {message && <div className="queue-summary">{message}</div>}
       {!isRunning && stats.pending > 0 && <button type="button" className="btn-start" disabled={!canStart} onClick={onStart} style={{ marginBottom: 12 }}><Play size={14} /> Retomar</button>}
-      <div className="job-list">{jobs.map((job: JobRow) => (<div key={job.jobId} className={"job-row job-" + job.status + (job.status === "completed" ? " job-clickable" : "")} onClick={() => onViewJob(job)} role={job.status === "completed" ? "button" : undefined} tabIndex={job.status === "completed" ? 0 : undefined} onKeyDown={(e) => { if (e.key === "Enter" && job.status === "completed") onViewJob(job); }}><div className="job-info"><span className="job-name">{job.fileName}</span><span className="job-path">{job.relativePath}</span></div><div className="job-status-area"><JobStatusBadge status={job.status} />{job.errorMessage && <span className="job-error" title={job.errorMessage}>{job.errorMessage}</span>}</div></div>))}</div>
+      <div className="job-list">{pageJobs.map((job: JobRow) => (<div key={job.jobId} className={"job-row job-" + job.status + (job.status === "completed" ? " job-clickable" : "")} onClick={() => onViewJob(job)} role={job.status === "completed" ? "button" : undefined} tabIndex={job.status === "completed" ? 0 : undefined} onKeyDown={(e) => { if (e.key === "Enter" && job.status === "completed") onViewJob(job); }}><div className="job-info"><span className="job-name">{job.fileName}</span><span className="job-path">{job.relativePath}</span></div><div className="job-status-area"><JobStatusBadge status={job.status} />{job.errorMessage && <span className="job-error" title={job.errorMessage}>{job.errorMessage}</span>}</div></div>))}</div>
+      <Pagination page={current} pageCount={pageCount} total={jobs.length} onPage={setPage} />
       {jobs.length === 0 && <p className="empty-hint">Nenhum job. Va para Inicio e escaneie uma pasta.</p>}
     </div>
   );
@@ -126,12 +134,23 @@ function StatCard({ icon, label, value, color }: { icon: React.ReactNode; label:
   return <div className={"stat-card stat-" + color}><div className="stat-icon">{icon}</div><div className="stat-value">{value}</div><div className="stat-label">{label}</div></div>;
 }
 
+function Pagination({ page, pageCount, total, onPage }: { page: number; pageCount: number; total: number; onPage: (p: number) => void }) {
+  if (pageCount <= 1) return null;
+  return (
+    <div className="pagination">
+      <button type="button" disabled={page <= 1} onClick={() => onPage(page - 1)}>Anterior</button>
+      <span className="pg-info">Pagina {page} de {pageCount} · {total} itens</span>
+      <button type="button" disabled={page >= pageCount} onClick={() => onPage(page + 1)}>Proxima</button>
+    </div>
+  );
+}
+
 // Shared formatting helpers
 const fmtClock = (ms: number) => { const total = Math.floor(ms / 1000); const h = Math.floor(total / 3600); const m = Math.floor((total % 3600) / 60); const s = total % 60; const mm = String(m).padStart(2, "0"); const ss = String(s).padStart(2, "0"); return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`; };
 const fmtDate = (d: string | null | undefined) => { if (!d) return ""; try { return new Date(d).toLocaleDateString("pt-BR") + " " + new Date(d).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }); } catch { return d; } };
 const fmtSize = (b: number) => { if (b < 1024) return b + " B"; if (b < 1048576) return (b / 1024).toFixed(1) + " KB"; return (b / 1048576).toFixed(1) + " MB"; };
 const durationOf = (t: TranscriptionView) => t.durationMs ?? (t.segments.length ? t.segments[t.segments.length - 1].endMs : 0);
-const fileDateOf = (t: TranscriptionView) => t.createdAt || t.modifiedAt;
+const fileDateOf = (t: TranscriptionView) => t.modifiedAt || t.createdAt;
 const textOf = (t: TranscriptionView) => (t.editedText?.trim() || t.rawText);
 
 // Portuguese stopwords (also filters words with <= 4 letters at call site)
@@ -151,6 +170,7 @@ function ReviewView({ jobs, selectedJob, transcription, onViewJob, onBack }: any
   const [ext, setExt] = useState("");
   const [sort, setSort] = useState("recent");
   const [minSize, setMinSize] = useState(0);
+  const [page, setPage] = useState(1);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -200,9 +220,14 @@ function ReviewView({ jobs, selectedJob, transcription, onViewJob, onBack }: any
     size: items.reduce((acc, t) => acc + t.sizeBytes, 0),
   }), [items]);
 
+  useEffect(() => { setPage(1); }, [search, ext, minSize, sort, items.length]);
+
   if (selectedJob && transcription) return <TranscriptionDetail transcription={transcription} onBack={onBack} />;
 
   const hasFilters = !!(search || ext || minSize);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const current = Math.min(page, pageCount);
+  const pageItems = filtered.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE);
 
   return (
     <div className="view review-view">
@@ -267,11 +292,14 @@ function ReviewView({ jobs, selectedJob, transcription, onViewJob, onBack }: any
       {loading ? <p className="empty-hint">Carregando...</p> :
         items.length === 0 ? <p className="empty-hint">Nenhuma transcricao concluida.</p> :
         filtered.length === 0 ? <p className="empty-hint">Nenhum resultado para os filtros aplicados.</p> :
-        <div className="review-cards">
-          {filtered.map(t => (
-            <FileCard key={t.transcriptionId} transcription={t} onViewJob={onViewJob} jobs={jobs} query={search.trim()} />
-          ))}
-        </div>}
+        <>
+          <div className="review-cards">
+            {pageItems.map(t => (
+              <FileCard key={t.transcriptionId} transcription={t} onViewJob={onViewJob} jobs={jobs} query={search.trim()} />
+            ))}
+          </div>
+          <Pagination page={current} pageCount={pageCount} total={filtered.length} onPage={setPage} />
+        </>}
     </div>
   );
 }
