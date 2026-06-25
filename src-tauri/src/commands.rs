@@ -73,7 +73,7 @@ impl AppState {
         }
     }
 
-    async fn scan_source_folder_path(&self, path: String) -> Result<ScanResponse, String> {
+    async fn scan_source_folder_path(&self, path: String, project_id: Option<i64>) -> Result<ScanResponse, String> {
         let (source_root, discovered) = tauri::async_runtime::spawn_blocking(move || {
             let source_root = dunce::canonicalize(PathBuf::from(path))
                 .map_err(|error| format!("Unable to read source folder: {error}"))?;
@@ -87,7 +87,21 @@ impl AppState {
         .await
         .map_err(|error| format!("Unable to run folder scan: {error}"))??;
 
-        let job_ids = queue::enqueue_discovered_media(&self.pool, &discovered, None)
+        // Resolve the target project: explicit id, or one named after the folder.
+        let project_id = match project_id {
+            Some(id) => id,
+            None => {
+                let name = source_root
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| source_root.to_string_lossy().into_owned());
+                db::get_or_create_project_by_name(&self.pool, &name)
+                    .await
+                    .map_err(|e| e.to_string())?
+            }
+        };
+
+        let job_ids = queue::enqueue_discovered_media(&self.pool, &discovered, Some(project_id))
             .await
             .map_err(|error| format!("Unable to queue discovered media: {error}"))?;
 
@@ -122,9 +136,45 @@ impl AppState {
 #[tauri::command]
 pub async fn scan_source_folder(
     path: String,
+    project_id: Option<i64>,
     state: State<'_, AppState>,
 ) -> Result<ScanResponse, String> {
-    state.scan_source_folder_path(path).await
+    state.scan_source_folder_path(path, project_id).await
+}
+
+#[tauri::command]
+pub async fn list_projects(state: State<'_, AppState>) -> Result<Vec<db::ProjectView>, String> {
+    db::list_projects(&state.pool).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn create_project(name: String, state: State<'_, AppState>) -> Result<i64, String> {
+    db::create_project(&state.pool, &name).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn rename_project(id: i64, name: String, state: State<'_, AppState>) -> Result<(), String> {
+    db::rename_project(&state.pool, id, &name).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_project_archived(id: i64, archived: bool, state: State<'_, AppState>) -> Result<(), String> {
+    db::set_project_archived(&state.pool, id, archived).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_project_default_profile(id: i64, profile_id: Option<i64>, state: State<'_, AppState>) -> Result<(), String> {
+    db::set_project_default_profile(&state.pool, id, profile_id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_project(id: i64, state: State<'_, AppState>) -> Result<(), String> {
+    db::delete_project(&state.pool, id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn cleanup_duplicate_jobs(state: State<'_, AppState>) -> Result<u64, String> {
+    db::cleanup_duplicate_jobs(&state.pool).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -182,12 +232,9 @@ pub async fn set_active_profile(profile: db::ProfileRow, state: State<'_, AppSta
 
 #[tauri::command]
 pub async fn start_transcription(state: State<'_, AppState>) -> Result<(), String> {
-    let profile = state
-        .active_profile
-        .lock()
-        .map_err(|e| e.to_string())?
-        .clone()
-        .ok_or_else(|| "Nenhum perfil de transcricao ativo. Configure um perfil primeiro.".to_string())?;
+    // Global active profile is just a fallback; each job may resolve its own via
+    // its project's default profile.
+    let fallback = state.active_profile.lock().map_err(|e| e.to_string())?.clone();
 
     if state.running.swap(true, Ordering::SeqCst) {
         return Ok(()); // already running
@@ -201,7 +248,7 @@ pub async fn start_transcription(state: State<'_, AppState>) -> Result<(), Strin
 
     for _ in 0..workers {
         let pool = state.pool.clone();
-        let profile = profile.clone();
+        let fallback = fallback.clone();
         let cancel = cancel.clone();
         let running = running.clone();
         let active = active.clone();
@@ -230,7 +277,30 @@ pub async fn start_transcription(state: State<'_, AppState>) -> Result<(), Strin
 
                 let (job_id, media_file_id, absolute_path) = claimed;
                 let media_path = std::path::PathBuf::from(&absolute_path);
-                let job_profile = profile.clone();
+
+                // Resolve the profile: project default first, then global active.
+                let job_profile = match db::resolve_profile_for_media(&pool, media_file_id).await {
+                    Ok(Some(p)) => Some(p),
+                    _ => fallback.clone(),
+                };
+                let job_profile = match job_profile {
+                    Some(p) => p,
+                    None => {
+                        let _ = db::update_job_status(
+                            &pool, job_id, JobStatus::Error, 0.0,
+                            Some("Nenhum perfil ativo nem perfil padrao do projeto definido."),
+                        ).await;
+                        continue;
+                    }
+                };
+
+                // Capture engine metadata before the profile is moved into the worker.
+                let backend_label = if job_profile.backend == "faster_whisper" {
+                    "faster-whisper"
+                } else {
+                    "whisper.cpp"
+                };
+                let device_cfg = job_profile.device.clone();
 
                 let result = tauri::async_runtime::spawn_blocking(move || {
                     run_transcription(&media_path, &job_profile)
@@ -245,15 +315,10 @@ pub async fn start_transcription(state: State<'_, AppState>) -> Result<(), Strin
                             .map(|s| (s.start_ms, s.end_ms, s.text.clone(), s.confidence))
                             .collect();
 
-                        let backend_label = if profile.backend == "faster_whisper" {
-                            "faster-whisper"
-                        } else {
-                            "whisper.cpp"
-                        };
                         let device = transcription
                             .device_used
                             .clone()
-                            .unwrap_or_else(|| profile.device.clone());
+                            .unwrap_or_else(|| device_cfg.clone());
                         let engine = format!("{backend_label} · {device}");
 
                         match db::save_transcription(
@@ -320,8 +385,8 @@ pub async fn stop_transcription(state: State<'_, AppState>) -> Result<(), String
 }
 
 #[tauri::command]
-pub async fn retry_failed_jobs(source_root: Option<String>, state: State<'_, AppState>) -> Result<u64, String> {
-    db::retry_failed_jobs(&state.pool, source_root.as_deref())
+pub async fn retry_failed_jobs(project_id: Option<i64>, state: State<'_, AppState>) -> Result<u64, String> {
+    db::retry_failed_jobs(&state.pool, project_id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -715,7 +780,7 @@ mod tests {
         let state = AppState::new(pool);
 
         let response = state
-            .scan_source_folder_path(temp.path().to_string_lossy().into_owned())
+            .scan_source_folder_path(temp.path().to_string_lossy().into_owned(), None)
             .await
             .expect("scan should succeed");
 
@@ -738,7 +803,7 @@ mod tests {
         let state = AppState::new(pool);
 
         let error = state
-            .scan_source_folder_path("C:/definitely/missing/source".to_string())
+            .scan_source_folder_path("C:/definitely/missing/source".to_string(), None)
             .await
             .expect_err("missing source should fail");
 
@@ -756,16 +821,17 @@ mod tests {
         let state = AppState::new(pool);
 
         let first = state
-            .scan_source_folder_path(temp.path().to_string_lossy().into_owned())
+            .scan_source_folder_path(temp.path().to_string_lossy().into_owned(), None)
             .await
             .expect("first scan should succeed");
         let second = state
-            .scan_source_folder_path(temp.path().to_string_lossy().into_owned())
+            .scan_source_folder_path(temp.path().to_string_lossy().into_owned(), None)
             .await
             .expect("second scan should succeed");
 
         assert_eq!(first.queued_count, 1);
-        assert_eq!(second.queued_count, 1);
+        // Re-scanning must not enqueue the same file again.
+        assert_eq!(second.queued_count, 0);
 
         let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM transcription_jobs")
             .fetch_one(&state.pool)

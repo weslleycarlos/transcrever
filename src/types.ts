@@ -36,6 +36,18 @@ export interface ReviewDocument {
   segments: Segment[];
 }
 
+export interface ProjectView {
+  id: number;
+  name: string;
+  archived: boolean;
+  defaultProfileId?: number | null;
+  total: number;
+  pending: number;
+  processing: number;
+  completed: number;
+  error: number;
+}
+
 export interface ProfileRow {
   id: number;
   name: string;
