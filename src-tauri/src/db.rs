@@ -311,6 +311,72 @@ pub async fn list_all_jobs(pool: &SqlitePool) -> Result<Vec<JobWithMedia>> {
     Ok(rows)
 }
 
+/// Re-queues failed jobs (optionally only within one source folder) so they can
+/// be retried, e.g. with a different active profile.
+pub async fn retry_failed_jobs(pool: &SqlitePool, source_root: Option<&str>) -> Result<u64> {
+    let result = match source_root {
+        Some(root) => {
+            sqlx::query(
+                r#"
+                UPDATE transcription_jobs
+                SET status = 'pending', error_message = NULL, progress = 0,
+                    started_at = NULL, finished_at = NULL
+                WHERE status = 'error'
+                  AND media_file_id IN (SELECT id FROM media_files WHERE source_root = ?1)
+                "#,
+            )
+            .bind(root)
+            .execute(pool)
+            .await?
+        }
+        None => {
+            sqlx::query(
+                r#"
+                UPDATE transcription_jobs
+                SET status = 'pending', error_message = NULL, progress = 0,
+                    started_at = NULL, finished_at = NULL
+                WHERE status = 'error'
+                "#,
+            )
+            .execute(pool)
+            .await?
+        }
+    };
+    Ok(result.rows_affected())
+}
+
+/// Resets a single job back to pending, discarding any existing transcription
+/// (used to reprocess a completed/errored file with a different configuration).
+pub async fn reset_job(pool: &SqlitePool, job_id: i64) -> Result<()> {
+    let tids: Vec<(i64,)> =
+        sqlx::query_as("SELECT id FROM transcriptions WHERE job_id = ?1")
+            .bind(job_id)
+            .fetch_all(pool)
+            .await?;
+    for (tid,) in &tids {
+        sqlx::query("DELETE FROM transcription_segments WHERE transcription_id = ?1")
+            .bind(tid)
+            .execute(pool)
+            .await?;
+    }
+    sqlx::query("DELETE FROM transcriptions WHERE job_id = ?1")
+        .bind(job_id)
+        .execute(pool)
+        .await?;
+    sqlx::query(
+        r#"
+        UPDATE transcription_jobs
+        SET status = 'pending', error_message = NULL, progress = 0,
+            started_at = NULL, finished_at = NULL
+        WHERE id = ?1
+        "#,
+    )
+    .bind(job_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn get_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>> {
     let row: Option<(String,)> = sqlx::query_as("SELECT value FROM app_settings WHERE key = ?1")
         .bind(key)

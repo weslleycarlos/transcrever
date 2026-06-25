@@ -320,6 +320,18 @@ pub async fn stop_transcription(state: State<'_, AppState>) -> Result<(), String
 }
 
 #[tauri::command]
+pub async fn retry_failed_jobs(source_root: Option<String>, state: State<'_, AppState>) -> Result<u64, String> {
+    db::retry_failed_jobs(&state.pool, source_root.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn reset_job(job_id: i64, state: State<'_, AppState>) -> Result<(), String> {
+    db::reset_job(&state.pool, job_id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn get_concurrency(state: State<'_, AppState>) -> Result<usize, String> {
     Ok(state.concurrency.load(Ordering::SeqCst).max(1))
 }

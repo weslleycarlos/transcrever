@@ -62,6 +62,8 @@ fn main() {
             commands::set_active_profile,
             commands::start_transcription,
             commands::stop_transcription,
+            commands::retry_failed_jobs,
+            commands::reset_job,
             commands::get_concurrency,
             commands::set_concurrency,
             commands::list_jobs,

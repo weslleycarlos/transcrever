@@ -61,6 +61,24 @@ export default function App() {
   async function handleScan() { if (!source) return; try { const r = await invoke<ScanResponse>("scan_source_folder", { path: source }); setQueuedCount(r.queuedCount); setMessage(r.discoveredCount + " arquivos encontrados, " + r.queuedCount + " na fila."); } catch (e) { setMessage("Erro: " + formatError(e)); } }
   async function handleStart() { if (!canStart) return; try { stoppedRef.current = false; setStopping(false); await invoke("start_transcription"); setIsRunning(true); setNav("queue"); setMessage("Transcricao em andamento..."); startPolling(); } catch (e) { setMessage("Erro: " + formatError(e)); } }
   async function handleStop() { stoppedRef.current = true; setStopping(true); setMessage("Interrompendo... o arquivo atual sera finalizado."); try { await invoke("stop_transcription"); } catch (e) { setMessage("Erro: " + formatError(e)); } if (!pollingRef.current) startPolling(); }
+  async function beginProcessing() {
+    if (!activeProfile || isRunning) return;
+    stoppedRef.current = false; setStopping(false);
+    try { await invoke("start_transcription"); setIsRunning(true); setNav("queue"); startPolling(); }
+    catch (e) { setMessage("Erro: " + formatError(e)); }
+  }
+  async function handleRetryErrors(project?: string) {
+    try {
+      const n = await invoke<number>("retry_failed_jobs", { sourceRoot: project ?? null });
+      await loadJobs();
+      setMessage(`${n} item(ns) com erro re-enfileirado(s)` + (activeProfile ? ` com o perfil "${activeProfile.name}".` : ". Defina um perfil ativo para processar."));
+      await beginProcessing();
+    } catch (e) { setMessage("Erro: " + formatError(e)); }
+  }
+  async function handleReprocessJob(jobId: number) {
+    try { await invoke("reset_job", { jobId }); await loadJobs(); await beginProcessing(); }
+    catch (e) { setMessage("Erro: " + formatError(e)); }
+  }
   async function handleViewJob(job: JobRow) { if (job.status !== "completed") return; setSelectedJob(job); try { setTranscription(await invoke<TranscriptionView | null>("get_transcription", { jobId: job.jobId })); } catch (e) { setMessage("Erro: " + formatError(e)); } }
 
   const stats = useMemo(() => {
@@ -81,7 +99,7 @@ export default function App() {
       </nav>
       <section className="workspace">
         {nav === "home" && <HomeView source={source} setSource={setSource} destination={destination} setDestination={setDestination} message={message} setMessage={setMessage} queuedCount={queuedCount} setQueuedCount={setQueuedCount} isRunning={isRunning} canStart={canStart} onScan={handleScan} onStart={handleStart} pendingCount={stats.pending} completedCount={stats.completed} onGoQueue={() => setNav("queue")} />}
-        {nav === "queue" && <QueueView stats={stats} jobs={jobs} message={message} isRunning={isRunning} stopping={stopping} canStart={canStart} onStart={handleStart} onStop={handleStop} onViewJob={handleViewJob} />}
+        {nav === "queue" && <QueueView stats={stats} jobs={jobs} message={message} isRunning={isRunning} stopping={stopping} canStart={canStart} onStart={handleStart} onStop={handleStop} onViewJob={handleViewJob} onRetryErrors={handleRetryErrors} onReprocess={handleReprocessJob} />}
         {nav === "review" && <ReviewView jobs={jobs} selectedJob={selectedJob} transcription={transcription} onViewJob={handleViewJob} onBack={() => { setSelectedJob(null); setTranscription(null); }} />}
         {nav === "settings" && <SettingsView profiles={profiles} activeProfile={activeProfile} concurrency={concurrency} onSetConcurrency={handleSetConcurrency} onProfilesChanged={() => { loadProfiles(); loadActiveProfile(); }} />}
       </section>
@@ -140,7 +158,7 @@ const QUEUE_FILTERS: { key: string; label: string }[] = [
 
 const folderName = (p: string) => p ? p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p : p;
 
-function QueueView({ stats, jobs, message, isRunning, stopping, canStart, onStart, onStop, onViewJob }: any) {
+function QueueView({ stats, jobs, message, isRunning, stopping, canStart, onStart, onStop, onViewJob, onRetryErrors, onReprocess }: any) {
   const [page, setPage] = useState(1);
   const [filter, setFilter] = useState("all");
   const [project, setProject] = useState("all");
@@ -168,6 +186,7 @@ function QueueView({ stats, jobs, message, isRunning, stopping, canStart, onStar
         {isRunning
           ? <button type="button" className="btn-stop" disabled={stopping} onClick={onStop}><Square size={13} /> {stopping ? "Interrompendo..." : "Parar"}</button>
           : stats.pending > 0 && <button type="button" className="btn-start btn-start-sm" disabled={!canStart} onClick={onStart}><Play size={14} /> Retomar</button>}
+        {!isRunning && stats.errors > 0 && <button type="button" className="btn-mini" onClick={() => onRetryErrors(project === "all" ? undefined : project)} title="Re-enfileira os itens com erro usando o perfil ativo"><RefreshCw size={13} /> Reprocessar erros{project !== "all" ? " (projeto)" : ""}</button>}
         {projects.length > 1 && (
           <select value={project} onChange={e => setProject(e.target.value)} title="Projeto (pasta de origem)">
             <option value="all">Todos os projetos</option>
@@ -194,7 +213,12 @@ function QueueView({ stats, jobs, message, isRunning, stopping, canStart, onStar
               <span className="job-name">{job.fileName}</span>
               <span className="job-path">{job.relativePath}</span>
             </div>
-            <div className="job-status-area"><JobStatusBadge status={job.status} /></div>
+            <div className="job-status-area">
+              {!isRunning && (job.status === "error" || job.status === "completed") && (
+                <button type="button" className="btn-mini" title="Reprocessar com o perfil ativo" onClick={(e) => { e.stopPropagation(); onReprocess(job.jobId); }}><RefreshCw size={12} /></button>
+              )}
+              <JobStatusBadge status={job.status} />
+            </div>
           </div>
           {job.errorMessage && <div className="job-error-full"><AlertCircle size={13} /> <span>{job.errorMessage}</span></div>}
         </div>

@@ -54,11 +54,19 @@ pub async fn enqueue_discovered_media(
         .await?;
 
         let created_at = Utc::now().to_rfc3339();
-        sqlx::query(
+        // Idempotent: only enqueue a job when this media has NO job yet (in any
+        // status). A re-scan must not duplicate files already completed/errored;
+        // it should only pick up genuinely new files.
+        let result = sqlx::query(
             r#"
-            INSERT OR IGNORE INTO transcription_jobs
+            INSERT INTO transcription_jobs
             (media_file_id, status, profile_id, progress, created_at)
-            VALUES (?1, 'pending', ?2, 0, ?3)
+            SELECT ?1, 'pending', ?2, 0, ?3
+            WHERE NOT EXISTS (
+                SELECT 1 FROM transcription_jobs
+                WHERE media_file_id = ?1
+                  AND ((profile_id IS NULL AND ?2 IS NULL) OR profile_id = ?2)
+            )
             "#,
         )
         .bind(media_file_id.0)
@@ -67,23 +75,10 @@ pub async fn enqueue_discovered_media(
         .execute(&mut *tx)
         .await?;
 
-        let job_id: (i64,) = sqlx::query_as(
-            r#"
-            SELECT id
-            FROM transcription_jobs
-            WHERE media_file_id = ?1
-              AND ((profile_id IS NULL AND ?2 IS NULL) OR profile_id = ?2)
-              AND status IN ('pending', 'processing')
-            ORDER BY id
-            LIMIT 1
-            "#,
-        )
-        .bind(media_file_id.0)
-        .bind(profile_id)
-        .fetch_one(&mut *tx)
-        .await?;
-
-        job_ids.push(job_id.0);
+        // Only count newly queued jobs.
+        if result.rows_affected() == 1 {
+            job_ids.push(result.last_insert_rowid());
+        }
     }
 
     tx.commit().await?;
