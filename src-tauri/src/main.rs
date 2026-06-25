@@ -15,7 +15,9 @@ fn main() {
             let database_path = app_data_dir.join("transcrever.sqlite");
             let pool = tauri::async_runtime::block_on(db::connect(&database_path))?;
 
-            // Re-queue jobs interrupted by a previous close/crash.
+            // Heal databases from older versions: drop duplicate jobs and
+            // re-queue jobs interrupted by a previous close/crash.
+            let _ = tauri::async_runtime::block_on(db::cleanup_duplicate_jobs(&pool));
             let _ = tauri::async_runtime::block_on(db::reset_orphaned_jobs(&pool));
 
             let state = AppState::new(pool.clone());
