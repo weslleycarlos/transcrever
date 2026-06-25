@@ -24,10 +24,16 @@
     "active": true,
     "targets": "all",
     "icon": ["icons/icon.ico"],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "skip"
+      }
+    },
     "resources": {
       "models/": "./models/",
       "binaries/": "./binaries/",
-      "resources/": "./resources/"
+      "resources/": "./resources/",
+      "scripts/": "./scripts/"
     }
   }
 }

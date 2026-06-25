@@ -1,3 +1,6 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// ^ Esconde o console (cmd preto) no build de release no Windows.
+
 use transcrever::{
     commands::{self, AppState},
     db,
