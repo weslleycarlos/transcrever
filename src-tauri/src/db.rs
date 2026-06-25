@@ -246,6 +246,19 @@ pub async fn list_profiles(pool: &SqlitePool) -> Result<Vec<ProfileRow>> {
     Ok(rows)
 }
 
+pub async fn get_profile(pool: &SqlitePool, id: i64) -> Result<Option<ProfileRow>> {
+    let row = sqlx::query_as::<_, ProfileRow>(
+        r#"
+        SELECT id, name, backend, model_path, device, precision, threads, language, task, advanced_json
+        FROM transcription_profiles WHERE id = ?1
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
 pub async fn delete_profile(pool: &SqlitePool, profile_id: i64) -> Result<()> {
     let result = sqlx::query("DELETE FROM transcription_profiles WHERE id = ?1")
         .bind(profile_id)
