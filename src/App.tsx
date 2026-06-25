@@ -431,7 +431,9 @@ function ReviewView({ jobs, selectedJob, transcription, onViewJob, onBack }: any
   useEffect(() => { const id = setTimeout(() => setDebounced(search.trim()), 250); return () => clearTimeout(id); }, [search]);
 
   // When the loaded set hits the cap, switch to authoritative server-side search.
-  const atCap = items.length >= 1000;
+  // list_transcriptions now returns the full set, so client-side filtering is
+  // authoritative and we don't fall back to the (200-capped) server search.
+  const atCap = false;
   useEffect(() => {
     if (!atCap || !debounced) { setServerResults(null); return; }
     let cancel = false;
