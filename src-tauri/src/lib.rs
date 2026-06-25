@@ -5,3 +5,4 @@ pub mod export;
 pub mod models;
 pub mod queue;
 pub mod scanner;
+pub mod util;

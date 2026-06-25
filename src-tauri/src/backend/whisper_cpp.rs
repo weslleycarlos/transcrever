@@ -71,8 +71,10 @@ impl TranscriptionBackend for WhisperCppBackend {
         let output_json = output_base.with_extension("json");
         let args = self.build_args(media_path, profile, &output_base)?;
 
-        let output = Command::new(&self.executable_path)
-            .args(args)
+        let mut command = Command::new(&self.executable_path);
+        command.args(args);
+        crate::util::no_window(&mut command);
+        let output = command
             .output()
             .with_context(|| {
                 format!(

@@ -54,11 +54,10 @@ impl FasterWhisperBackend {
 
     fn find_python() -> anyhow::Result<String> {
         for candidate in &["python", "python3", "py"] {
-            if Command::new(candidate)
-                .arg("--version")
-                .output()
-                .is_ok()
-            {
+            let mut cmd = Command::new(candidate);
+            cmd.arg("--version");
+            crate::util::no_window(&mut cmd);
+            if cmd.output().is_ok() {
                 return Ok(candidate.to_string());
             }
         }
@@ -75,11 +74,14 @@ impl TranscriptionBackend for FasterWhisperBackend {
         let python = Self::find_python()?;
         let args = self.build_args(media_path, profile)?;
 
-        let output = Command::new(&python)
+        let mut command = Command::new(&python);
+        command
             .args(&args)
             // Avoid writing __pycache__ next to the script: it clutters the tree
             // and, under `tauri dev`, the file watcher would restart the app.
-            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .env("PYTHONDONTWRITEBYTECODE", "1");
+        crate::util::no_window(&mut command);
+        let output = command
             .output()
             .with_context(|| format!("failed to run {python} with faster-whisper script"))?;
 

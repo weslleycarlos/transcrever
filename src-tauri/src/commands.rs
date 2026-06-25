@@ -490,7 +490,8 @@ fn convert_to_wav_if_needed(media_path: &std::path::Path) -> anyhow::Result<std:
     // Try bundled ffmpeg first, then system PATH
     let ffmpeg = resolve_ffmpeg_exe();
 
-    let output = std::process::Command::new(&ffmpeg)
+    let mut command = std::process::Command::new(&ffmpeg);
+    command
         .args([
             "-y", "-i",
             &media_path.to_string_lossy(),
@@ -500,7 +501,9 @@ fn convert_to_wav_if_needed(media_path: &std::path::Path) -> anyhow::Result<std:
             &wav_path.to_string_lossy(),
         ])
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    crate::util::no_window(&mut command);
+    let output = command
         .output()
         .with_context(|| format!("ffmpeg not found at {}", ffmpeg.display()))?;
 
@@ -602,10 +605,10 @@ pub struct DependencyStatus {
 }
 
 fn detect_nvidia_gpu() -> (Option<String>, Option<String>) {
-    let output = match std::process::Command::new("nvidia-smi")
-        .args(["--query-gpu=name,compute_cap", "--format=csv,noheader"])
-        .output()
-    {
+    let mut gpu_cmd = std::process::Command::new("nvidia-smi");
+    gpu_cmd.args(["--query-gpu=name,compute_cap", "--format=csv,noheader"]);
+    crate::util::no_window(&mut gpu_cmd);
+    let output = match gpu_cmd.output() {
         Ok(o) if o.status.success() => o,
         _ => return (None, None),
     };
@@ -628,11 +631,10 @@ fn detect_nvidia_gpu() -> (Option<String>, Option<String>) {
 
 fn detect_python() -> Option<String> {
     for candidate in ["python", "python3", "py"] {
-        let ok = std::process::Command::new(candidate)
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
+        let mut cmd = std::process::Command::new(candidate);
+        cmd.arg("--version");
+        crate::util::no_window(&mut cmd);
+        let ok = cmd.output().map(|o| o.status.success()).unwrap_or(false);
         if ok {
             return Some(candidate.to_string());
         }
@@ -641,11 +643,10 @@ fn detect_python() -> Option<String> {
 }
 
 fn python_import_ok(python: &str, code: &str) -> bool {
-    std::process::Command::new(python)
-        .args(["-c", code])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    let mut cmd = std::process::Command::new(python);
+    cmd.args(["-c", code]);
+    crate::util::no_window(&mut cmd);
+    cmd.output().map(|o| o.status.success()).unwrap_or(false)
 }
 
 #[tauri::command]
@@ -678,8 +679,10 @@ pub async fn install_faster_whisper(gpu: bool) -> Result<String, String> {
             args.push("nvidia-cudnn-cu12");
         }
 
-        let output = std::process::Command::new(&python)
-            .args(&args)
+        let mut command = std::process::Command::new(&python);
+        command.args(&args);
+        crate::util::no_window(&mut command);
+        let output = command
             .output()
             .map_err(|e| format!("Falha ao executar pip: {e}"))?;
 
