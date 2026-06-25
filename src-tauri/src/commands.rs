@@ -450,10 +450,7 @@ fn run_transcription(
 
     match profile.backend.as_str() {
         "faster_whisper" => {
-            let script_path = std::env::current_dir()
-                .unwrap_or_default()
-                .join("scripts")
-                .join("faster_whisper_transcribe.py");
+            let script_path = resolve_faster_whisper_script();
             let backend = crate::backend::faster_whisper::FasterWhisperBackend::new(script_path);
             backend.transcribe(media_path, &profile_config)
         }
@@ -519,34 +516,54 @@ fn convert_to_wav_if_needed(media_path: &std::path::Path) -> anyhow::Result<std:
     Ok(wav_path)
 }
 
+/// Locates a bundled resource by relative path. Looks next to the executable
+/// first (installed app), then in the source tree (dev), then in the current
+/// working directory. Returns None when not found anywhere.
+fn find_bundled_resource(rel: &[&str]) -> Option<std::path::PathBuf> {
+    let mut bases: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            bases.push(dir.to_path_buf());
+        }
+    }
+    bases.push(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    if let Ok(cwd) = std::env::current_dir() {
+        bases.push(cwd);
+    }
+
+    for base in bases {
+        let mut candidate = base;
+        for part in rel {
+            candidate = candidate.join(part);
+        }
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 fn resolve_ffmpeg_exe() -> std::path::PathBuf {
-    // Bundled in CARGO_MANIFEST_DIR (src-tauri/) during dev
-    let source = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("resources")
-        .join("ffmpeg.exe");
-    if source.exists() { return source; }
-
-    // Bundled in resource_dir during production
-    let bundled = std::env::current_dir()
-        .unwrap_or_default()
-        .join("resources")
-        .join("ffmpeg.exe");
-    if bundled.exists() { return bundled; }
-
-    // Fallback to system PATH
-    std::path::PathBuf::from("ffmpeg")
+    find_bundled_resource(&["resources", "ffmpeg.exe"])
+        // Fallback to system PATH.
+        .unwrap_or_else(|| std::path::PathBuf::from("ffmpeg"))
 }
 
 fn resolve_whisper_exe() -> std::path::PathBuf {
-    let exe = std::env::current_dir()
-        .unwrap_or_default()
-        .join("binaries")
-        .join("whisper-cli.exe");
-    if exe.exists() { exe } else {
+    find_bundled_resource(&["binaries", "whisper-cli.exe"]).unwrap_or_else(|| {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("binaries")
             .join("whisper-cli.exe")
-    }
+    })
+}
+
+fn resolve_faster_whisper_script() -> std::path::PathBuf {
+    find_bundled_resource(&["scripts", "faster_whisper_transcribe.py"]).unwrap_or_else(|| {
+        std::env::current_dir()
+            .unwrap_or_default()
+            .join("scripts")
+            .join("faster_whisper_transcribe.py")
+    })
 }
 
 /// Resolves the model path for the given backend.

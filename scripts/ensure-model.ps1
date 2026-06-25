@@ -56,4 +56,36 @@ if (-not (Test-Path $binFile)) {
     } else { Write-Host "AVISO: whisper-cli.exe nao encontrado no zip." -ForegroundColor Red }
 } else { Write-Host "whisper.cpp ja existe." -ForegroundColor Green }
 
+# ── ffmpeg (conversao de formatos nao-nativos do whisper.cpp) ──
+
+$resDir = Join-Path $root "src-tauri"
+$resDir = Join-Path $resDir "resources"
+$ffFile = Join-Path $resDir "ffmpeg.exe"
+
+if (-not (Test-Path $ffFile)) {
+    Write-Host "Baixando ffmpeg..." -ForegroundColor Yellow
+    New-Item -ItemType Directory -Force -Path $resDir | Out-Null
+    # Build essential do gyan.dev (zip contem bin\ffmpeg.exe estatico)
+    $ffUrl = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+    $ffZip = Join-Path $env:TEMP "ffmpeg-build.zip"
+    $ffTmp = Join-Path $env:TEMP "ffmpeg-extract"
+    try {
+        Invoke-WebRequest -Uri $ffUrl -OutFile $ffZip -UseBasicParsing
+        if (Test-Path $ffTmp) { Remove-Item $ffTmp -Recurse -Force }
+        Expand-Archive -Path $ffZip -DestinationPath $ffTmp -Force
+        $found = Get-ChildItem -Path $ffTmp -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+        if ($found) {
+            Move-Item -Path $found.FullName -Destination $ffFile -Force
+            $sizeMB = [math]::Round((Get-Item $ffFile).Length / 1MB, 1)
+            Write-Host "ffmpeg instalado: ${sizeMB} MB" -ForegroundColor Green
+        } else {
+            Write-Host "AVISO: ffmpeg.exe nao encontrado no zip." -ForegroundColor Red
+        }
+        Remove-Item $ffZip -Force
+        Remove-Item $ffTmp -Recurse -Force
+    } catch {
+        Write-Host "AVISO: falha ao baixar ffmpeg ($_). Formatos como opus/mpga/video podem nao converter." -ForegroundColor Red
+    }
+} else { Write-Host "ffmpeg ja existe." -ForegroundColor Green }
+
 Write-Host "Pronto para build!" -ForegroundColor Cyan
