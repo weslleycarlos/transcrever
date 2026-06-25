@@ -191,7 +191,7 @@ pub async fn save_profile(profile: db::ProfileRow, state: State<'_, AppState>) -
     let saved = db::ProfileRow { id, ..profile };
     // Keep the active profile in sync only when creating the first profile or
     // editing the one that is currently active.
-    {
+    let should_set = {
         let mut active = state.active_profile.lock().map_err(|e| e.to_string())?;
         let should_set = match active.as_ref() {
             None => true,
@@ -200,6 +200,10 @@ pub async fn save_profile(profile: db::ProfileRow, state: State<'_, AppState>) -
         if should_set {
             *active = Some(saved.clone());
         }
+        should_set
+    };
+    if should_set {
+        let _ = db::set_setting(&state.pool, "active_profile_id", &saved.id.to_string()).await;
     }
     Ok(saved)
 }
@@ -212,9 +216,17 @@ pub async fn list_profiles(state: State<'_, AppState>) -> Result<Vec<db::Profile
 #[tauri::command]
 pub async fn delete_profile(id: i64, state: State<'_, AppState>) -> Result<(), String> {
     db::delete_profile(&state.pool, id).await.map_err(|e| e.to_string())?;
-    let mut active = state.active_profile.lock().map_err(|e| e.to_string())?;
-    if active.as_ref().map_or(false, |p| p.id == id) {
-        *active = None;
+    let cleared = {
+        let mut active = state.active_profile.lock().map_err(|e| e.to_string())?;
+        if active.as_ref().map_or(false, |p| p.id == id) {
+            *active = None;
+            true
+        } else {
+            false
+        }
+    };
+    if cleared {
+        let _ = db::set_setting(&state.pool, "active_profile_id", "").await;
     }
     Ok(())
 }
@@ -226,7 +238,9 @@ pub async fn get_active_profile(state: State<'_, AppState>) -> Result<Option<db:
 
 #[tauri::command]
 pub async fn set_active_profile(profile: db::ProfileRow, state: State<'_, AppState>) -> Result<(), String> {
+    let id = profile.id;
     *state.active_profile.lock().map_err(|e| e.to_string())? = Some(profile);
+    let _ = db::set_setting(&state.pool, "active_profile_id", &id.to_string()).await;
     Ok(())
 }
 

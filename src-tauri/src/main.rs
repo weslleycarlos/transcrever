@@ -45,9 +45,29 @@ fn main() {
                 )?;
                 let profiles = tauri::async_runtime::block_on(db::list_profiles(&pool))?;
                 if let Some(profile) = profiles.into_iter().find(|p| p.id == profile_id) {
+                    let _ = tauri::async_runtime::block_on(db::set_setting(
+                        &pool, "active_profile_id", &profile.id.to_string(),
+                    ));
                     *state.active_profile.lock().map_err(|_| {
                         std::io::Error::new(std::io::ErrorKind::Other, "lock")
                     })? = Some(profile);
+                }
+            }
+
+            // Restore the previously active profile across restarts.
+            if state.active_profile.lock().map(|g| g.is_none()).unwrap_or(false) {
+                if let Ok(Some(value)) =
+                    tauri::async_runtime::block_on(db::get_setting(&pool, "active_profile_id"))
+                {
+                    if let Ok(id) = value.parse::<i64>() {
+                        if let Ok(Some(profile)) =
+                            tauri::async_runtime::block_on(db::get_profile(&pool, id))
+                        {
+                            if let Ok(mut guard) = state.active_profile.lock() {
+                                *guard = Some(profile);
+                            }
+                        }
+                    }
                 }
             }
 
