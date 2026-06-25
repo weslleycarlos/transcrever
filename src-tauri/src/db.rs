@@ -821,21 +821,23 @@ pub async fn list_transcriptions(pool: &SqlitePool) -> Result<Vec<TranscriptionV
         FROM transcriptions t
         JOIN media_files m ON m.id = t.media_file_id
         ORDER BY t.id DESC
-        LIMIT 1000
         "#,
     )
     .fetch_all(pool)
     .await?;
 
+    let ids: Vec<i64> = rows.iter().map(|r| r.0).collect();
+    let mut seg_map = fetch_segments_map(pool, &ids).await?;
+
     let mut results = Vec::with_capacity(rows.len());
     for (tid, mid, jid, fname, apath, rpath, ext, sz, dur, mat, cat, raw, edited, engine) in rows {
-        let segs = fetch_segments(pool, tid).await?;
         results.push(TranscriptionView {
             transcription_id: tid, media_file_id: mid, job_id: jid,
             file_name: fname, absolute_path: apath, relative_path: rpath,
             extension: ext, size_bytes: sz, duration_ms: dur,
             modified_at: mat, created_at: cat,
-            raw_text: raw, edited_text: edited, engine, segments: segs,
+            raw_text: raw, edited_text: edited, engine,
+            segments: seg_map.remove(&tid).unwrap_or_default(),
         });
     }
     Ok(results)
@@ -863,18 +865,53 @@ pub async fn search_transcriptions(
     .fetch_all(pool)
     .await?;
 
+    let ids: Vec<i64> = rows.iter().map(|r| r.0).collect();
+    let mut seg_map = fetch_segments_map(pool, &ids).await?;
+
     let mut results = Vec::with_capacity(rows.len());
     for (tid, mid, jid, fname, apath, rpath, ext, sz, dur, mat, cat, raw, edited, engine) in rows {
-        let segs = fetch_segments(pool, tid).await?;
         results.push(TranscriptionView {
             transcription_id: tid, media_file_id: mid, job_id: jid,
             file_name: fname, absolute_path: apath, relative_path: rpath,
             extension: ext, size_bytes: sz, duration_ms: dur,
             modified_at: mat, created_at: cat,
-            raw_text: raw, edited_text: edited, engine, segments: segs,
+            raw_text: raw, edited_text: edited, engine,
+            segments: seg_map.remove(&tid).unwrap_or_default(),
         });
     }
     Ok(results)
+}
+
+/// Loads the segments of many transcriptions in a single query, grouped by id.
+async fn fetch_segments_map(
+    pool: &SqlitePool,
+    transcription_ids: &[i64],
+) -> Result<std::collections::HashMap<i64, Vec<SegmentView>>> {
+    let mut map: std::collections::HashMap<i64, Vec<SegmentView>> = std::collections::HashMap::new();
+    if transcription_ids.is_empty() {
+        return Ok(map);
+    }
+    // ids come from the DB (i64), safe to inline into the IN list.
+    let in_list = transcription_ids
+        .iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT transcription_id, id, segment_index, start_ms, end_ms, raw_text, edited_text, confidence \
+         FROM transcription_segments WHERE transcription_id IN ({in_list}) \
+         ORDER BY transcription_id, segment_index"
+    );
+    let rows = sqlx::query_as::<_, (i64, i64, i64, i64, i64, String, Option<String>, Option<f32>)>(&sql)
+        .fetch_all(pool)
+        .await?;
+    for (tid, id, idx, start_ms, end_ms, raw, edited, conf) in rows {
+        map.entry(tid).or_default().push(SegmentView {
+            id, segment_index: idx, start_ms, end_ms,
+            raw_text: raw, edited_text: edited, confidence: conf,
+        });
+    }
+    Ok(map)
 }
 
 async fn fetch_segments(pool: &SqlitePool, transcription_id: i64) -> Result<Vec<SegmentView>> {
