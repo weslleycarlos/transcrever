@@ -6,9 +6,9 @@ import {
   Plus, RefreshCw, Save, Search, Settings, Square, Trash2, X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { JobRow, ProfileRow, ScanResponse, TranscriptionView } from "./types";
+import type { JobRow, ProfileRow, ProjectView, ScanResponse, TranscriptionView } from "./types";
 
-type NavSection = "home" | "queue" | "review" | "settings";
+type NavSection = "home" | "projects" | "queue" | "review" | "settings";
 
 const EMPTY_PROFILE: ProfileRow = {
   id: 0, name: "", backend: "faster_whisper", modelPath: "", device: "cpu",
@@ -31,11 +31,13 @@ export default function App() {
   const [selectedJob, setSelectedJob] = useState<JobRow | null>(null);
   const [transcription, setTranscription] = useState<TranscriptionView | null>(null);
   const [concurrency, setConcurrency] = useState(1);
+  const [projects, setProjects] = useState<ProjectView[]>([]);
   const hasPending = useMemo(() => jobs.some(j => j.status === "pending"), [jobs]);
   const canStart = (queuedCount > 0 || hasPending) && activeProfile !== null && !isRunning;
 
-  useEffect(() => { loadProfiles(); loadActiveProfile(); loadConcurrency(); loadJobs(); return () => stopPolling(); }, []);
+  useEffect(() => { loadProfiles(); loadActiveProfile(); loadConcurrency(); loadJobs(); loadProjects(); return () => stopPolling(); }, []);
   async function loadJobs() { try { setJobs(await invoke<JobRow[]>("list_jobs")); } catch { /* */ } }
+  async function loadProjects() { try { setProjects(await invoke<ProjectView[]>("list_projects")); } catch { /* */ } }
   async function loadConcurrency() { try { setConcurrency(await invoke<number>("get_concurrency")); } catch { /* */ } }
   async function handleSetConcurrency(value: number) { try { await invoke("set_concurrency", { value }); setConcurrency(value); } catch { /* */ } }
 
@@ -61,7 +63,39 @@ export default function App() {
   async function handleScan() { if (!source) return; try { const r = await invoke<ScanResponse>("scan_source_folder", { path: source }); setQueuedCount(r.queuedCount); setMessage(r.discoveredCount + " arquivos encontrados, " + r.queuedCount + " na fila."); } catch (e) { setMessage("Erro: " + formatError(e)); } }
   async function handleStart() { if (!canStart) return; try { stoppedRef.current = false; setStopping(false); await invoke("start_transcription"); setIsRunning(true); setNav("queue"); setMessage("Transcricao em andamento..."); startPolling(); } catch (e) { setMessage("Erro: " + formatError(e)); } }
   async function handleStop() { stoppedRef.current = true; setStopping(true); setMessage("Interrompendo... o arquivo atual sera finalizado."); try { await invoke("stop_transcription"); } catch (e) { setMessage("Erro: " + formatError(e)); } if (!pollingRef.current) startPolling(); }
+  async function beginProcessing() {
+    if (!activeProfile || isRunning) return;
+    stoppedRef.current = false; setStopping(false);
+    try { await invoke("start_transcription"); setIsRunning(true); setNav("queue"); startPolling(); }
+    catch (e) { setMessage("Erro: " + formatError(e)); }
+  }
+  async function handleRetryErrors(projectId?: number) {
+    try {
+      const n = await invoke<number>("retry_failed_jobs", { projectId: projectId ?? null });
+      await refreshAll();
+      setMessage(`${n} item(ns) com erro re-enfileirado(s).`);
+      await beginProcessing();
+    } catch (e) { setMessage("Erro: " + formatError(e)); }
+  }
+  async function handleReprocessJob(jobId: number) {
+    try { await invoke("reset_job", { jobId }); await loadJobs(); await beginProcessing(); }
+    catch (e) { setMessage("Erro: " + formatError(e)); }
+  }
   async function handleViewJob(job: JobRow) { if (job.status !== "completed") return; setSelectedJob(job); try { setTranscription(await invoke<TranscriptionView | null>("get_transcription", { jobId: job.jobId })); } catch (e) { setMessage("Erro: " + formatError(e)); } }
+
+  async function refreshAll() { await loadProjects(); await loadJobs(); }
+  async function handleAddFolderToProject(projectId: number) {
+    const s = await open({ directory: true, multiple: false });
+    if (typeof s !== "string") return;
+    try { const r = await invoke<ScanResponse>("scan_source_folder", { path: s, projectId }); setMessage(`${r.discoveredCount} arquivos, ${r.queuedCount} novos na fila.`); await refreshAll(); }
+    catch (e) { setMessage("Erro: " + formatError(e)); }
+  }
+  async function handleCreateProject(name: string) { try { await invoke("create_project", { name }); await loadProjects(); } catch (e) { setMessage("Erro: " + formatError(e)); } }
+  async function handleRenameProject(id: number, name: string) { try { await invoke("rename_project", { id, name }); await loadProjects(); } catch (e) { setMessage("Erro: " + formatError(e)); } }
+  async function handleArchiveProject(id: number, archived: boolean) { try { await invoke("set_project_archived", { id, archived }); await loadProjects(); } catch (e) { setMessage("Erro: " + formatError(e)); } }
+  async function handleDeleteProject(id: number) { try { await invoke("delete_project", { id }); await refreshAll(); } catch (e) { setMessage("Erro: " + formatError(e)); } }
+  async function handleSetProjectProfile(id: number, profileId: number | null) { try { await invoke("set_project_default_profile", { id, profileId }); await loadProjects(); } catch (e) { setMessage("Erro: " + formatError(e)); } }
+  async function handleCleanupDuplicates() { try { const n = await invoke<number>("cleanup_duplicate_jobs"); setMessage(`${n} job(s) duplicado(s) removido(s).`); await refreshAll(); } catch (e) { setMessage("Erro: " + formatError(e)); } }
 
   const stats = useMemo(() => {
     const t = jobs.length, p = jobs.filter(j => j.status === "pending").length, r = jobs.filter(j => j.status === "processing").length;
@@ -74,6 +108,7 @@ export default function App() {
       <nav className="sidebar">
         <h1 className="app-logo">Transcrever</h1>
         <NavItem icon={<Home size={18} />} label="Inicio" active={nav === "home"} onClick={() => setNav("home")} />
+        <NavItem icon={<Layers size={18} />} label="Projetos" active={nav === "projects"} onClick={() => { setNav("projects"); loadProjects(); }} badge={projects.filter(p => !p.archived).length || undefined} />
         <NavItem icon={<ListVideo size={18} />} label="Fila" active={nav === "queue"} onClick={() => setNav("queue")} badge={jobs.length || undefined} />
         <NavItem icon={<Pencil size={18} />} label="Revisao" active={nav === "review"} onClick={() => setNav("review")} badge={stats.completed || undefined} />
         <NavItem icon={<Settings size={18} />} label="Configuracoes" active={nav === "settings"} onClick={() => setNav("settings")} />
@@ -81,7 +116,8 @@ export default function App() {
       </nav>
       <section className="workspace">
         {nav === "home" && <HomeView source={source} setSource={setSource} destination={destination} setDestination={setDestination} message={message} setMessage={setMessage} queuedCount={queuedCount} setQueuedCount={setQueuedCount} isRunning={isRunning} canStart={canStart} onScan={handleScan} onStart={handleStart} pendingCount={stats.pending} completedCount={stats.completed} onGoQueue={() => setNav("queue")} />}
-        {nav === "queue" && <QueueView stats={stats} jobs={jobs} message={message} isRunning={isRunning} stopping={stopping} canStart={canStart} onStart={handleStart} onStop={handleStop} onViewJob={handleViewJob} />}
+        {nav === "projects" && <ProjectsView projects={projects} profiles={profiles} message={message} isRunning={isRunning} onCreate={handleCreateProject} onAddFolder={handleAddFolderToProject} onRename={handleRenameProject} onArchive={handleArchiveProject} onDelete={handleDeleteProject} onSetProfile={handleSetProjectProfile} onRetryErrors={handleRetryErrors} onProcess={beginProcessing} onCleanupDuplicates={handleCleanupDuplicates} onGoQueue={() => setNav("queue")} />}
+        {nav === "queue" && <QueueView stats={stats} jobs={jobs} message={message} isRunning={isRunning} stopping={stopping} canStart={canStart} onStart={handleStart} onStop={handleStop} onViewJob={handleViewJob} onRetryErrors={handleRetryErrors} onReprocess={handleReprocessJob} />}
         {nav === "review" && <ReviewView jobs={jobs} selectedJob={selectedJob} transcription={transcription} onViewJob={handleViewJob} onBack={() => { setSelectedJob(null); setTranscription(null); }} />}
         {nav === "settings" && <SettingsView profiles={profiles} activeProfile={activeProfile} concurrency={concurrency} onSetConcurrency={handleSetConcurrency} onProfilesChanged={() => { loadProfiles(); loadActiveProfile(); }} />}
       </section>
@@ -129,6 +165,81 @@ function HomeView({ source, setSource, destination, setDestination, message, set
   );
 }
 
+function ProjectsView({ projects, profiles, message, isRunning, onCreate, onAddFolder, onRename, onArchive, onDelete, onSetProfile, onRetryErrors, onProcess, onCleanupDuplicates, onGoQueue }: any) {
+  const [newName, setNewName] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
+  const visible = (projects as ProjectView[]).filter(p => showArchived || !p.archived);
+  return (
+    <div className="view projects-view">
+      <div className="review-head">
+        <h2>Projetos</h2>
+        <div style={{ display: "flex", gap: 8 }}>
+          <label className="hint" style={{ display: "flex", alignItems: "center", gap: 4 }}><input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)} style={{ minHeight: "auto" }} /> Mostrar arquivados</label>
+          <button type="button" className="btn-ghost" onClick={onCleanupDuplicates} title="Remove jobs duplicados deixados por versoes antigas"><Trash2 size={13} /> Remover duplicados</button>
+        </div>
+      </div>
+
+      <div className="card">
+        <label className="field">Novo projeto<div className="field-row">
+          <input type="text" placeholder="Nome do projeto" value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && newName.trim()) { onCreate(newName.trim()); setNewName(""); } }} />
+          <button type="button" disabled={!newName.trim()} onClick={() => { onCreate(newName.trim()); setNewName(""); }}><Plus size={14} /> Criar</button>
+        </div></label>
+      </div>
+
+      {message && <div className="queue-summary">{message}</div>}
+
+      {visible.length === 0 ? <p className="empty-hint">Nenhum projeto. Crie um e adicione pastas, ou escaneie pela tela Inicio.</p> :
+        <div className="project-grid">
+          {visible.map(p => <ProjectCard key={p.id} project={p} profiles={profiles} isRunning={isRunning}
+            onAddFolder={onAddFolder} onRename={onRename} onArchive={onArchive} onDelete={onDelete}
+            onSetProfile={onSetProfile} onRetryErrors={onRetryErrors} onProcess={onProcess} onGoQueue={onGoQueue} />)}
+        </div>}
+    </div>
+  );
+}
+
+function ProjectCard({ project, profiles, isRunning, onAddFolder, onRename, onArchive, onDelete, onSetProfile, onRetryErrors, onProcess, onGoQueue }: any) {
+  const p = project as ProjectView;
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(p.name);
+  const pct = p.total > 0 ? Math.round(((p.completed + p.error) / p.total) * 100) : 0;
+  return (
+    <div className={"project-card" + (p.archived ? " project-archived" : "")}>
+      <div className="pc-head">
+        {editing
+          ? <div className="field-row" style={{ flex: 1 }}><input type="text" value={name} onChange={e => setName(e.target.value)} /><button type="button" onClick={() => { onRename(p.id, name.trim() || p.name); setEditing(false); }}><Check size={13} /></button></div>
+          : <span className="pc-name" title={p.name}>{folderName(p.name) || p.name}{p.archived && <span className="pc-archived-tag">arquivado</span>}</span>}
+        {!editing && <button type="button" className="btn-mini" onClick={() => { setName(p.name); setEditing(true); }} title="Renomear"><Pencil size={12} /></button>}
+      </div>
+
+      <div className="pc-stats">
+        <span className="fc-tag">{p.total} total</span>
+        {p.pending > 0 && <span className="fc-tag">{p.pending} pend.</span>}
+        {p.processing > 0 && <span className="fc-tag">{p.processing} proc.</span>}
+        <span className="fc-tag" style={{ color: "#16a34a" }}>{p.completed} ok</span>
+        {p.error > 0 && <span className="fc-tag" style={{ color: "#dc2626" }}>{p.error} erro</span>}
+      </div>
+      {p.total > 0 && <div className="progress-bar-container" style={{ margin: "8px 0" }}><div className="progress-bar" style={{ width: pct + "%" }} /></div>}
+
+      <label className="field" style={{ margin: "6px 0" }}>Perfil padrao do projeto
+        <select value={p.defaultProfileId ?? ""} onChange={e => onSetProfile(p.id, e.target.value ? Number(e.target.value) : null)}>
+          <option value="">— usar perfil ativo global —</option>
+          {(profiles as ProfileRow[]).map(pr => <option key={pr.id} value={pr.id}>{pr.name}</option>)}
+        </select>
+      </label>
+
+      <div className="pc-actions">
+        <button type="button" className="btn-mini" onClick={() => onAddFolder(p.id)}><FolderOpen size={13} /> Adicionar pasta</button>
+        {(p.pending > 0 || p.error > 0) && <button type="button" className="btn-start btn-start-sm" disabled={isRunning} onClick={() => onProcess()}><Play size={13} /> Processar</button>}
+        {p.error > 0 && <button type="button" className="btn-mini" onClick={() => onRetryErrors(p.id)}><RefreshCw size={13} /> Reprocessar erros</button>}
+        {p.completed > 0 && <button type="button" className="btn-mini" onClick={onGoQueue}>Ver na fila</button>}
+        <button type="button" className="btn-mini" onClick={() => onArchive(p.id, !p.archived)}>{p.archived ? "Desarquivar" : "Arquivar"}</button>
+        <button type="button" className="btn-mini btn-danger" onClick={() => { if (confirm(`Excluir o projeto "${folderName(p.name)}"? Isso remove os dados do app (jobs e transcricoes). Os arquivos de audio NAO sao apagados.`)) onDelete(p.id); }}><Trash2 size={13} /></button>
+      </div>
+    </div>
+  );
+}
+
 const PAGE_SIZE = 25;
 const QUEUE_FILTERS: { key: string; label: string }[] = [
   { key: "all", label: "Todos" },
@@ -140,7 +251,7 @@ const QUEUE_FILTERS: { key: string; label: string }[] = [
 
 const folderName = (p: string) => p ? p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p : p;
 
-function QueueView({ stats, jobs, message, isRunning, stopping, canStart, onStart, onStop, onViewJob }: any) {
+function QueueView({ stats, jobs, message, isRunning, stopping, canStart, onStart, onStop, onViewJob, onRetryErrors, onReprocess }: any) {
   const [page, setPage] = useState(1);
   const [filter, setFilter] = useState("all");
   const [project, setProject] = useState("all");
@@ -168,6 +279,7 @@ function QueueView({ stats, jobs, message, isRunning, stopping, canStart, onStar
         {isRunning
           ? <button type="button" className="btn-stop" disabled={stopping} onClick={onStop}><Square size={13} /> {stopping ? "Interrompendo..." : "Parar"}</button>
           : stats.pending > 0 && <button type="button" className="btn-start btn-start-sm" disabled={!canStart} onClick={onStart}><Play size={14} /> Retomar</button>}
+        {!isRunning && stats.errors > 0 && <button type="button" className="btn-mini" onClick={() => onRetryErrors()} title="Re-enfileira todos os itens com erro"><RefreshCw size={13} /> Reprocessar erros</button>}
         {projects.length > 1 && (
           <select value={project} onChange={e => setProject(e.target.value)} title="Projeto (pasta de origem)">
             <option value="all">Todos os projetos</option>
@@ -194,7 +306,12 @@ function QueueView({ stats, jobs, message, isRunning, stopping, canStart, onStar
               <span className="job-name">{job.fileName}</span>
               <span className="job-path">{job.relativePath}</span>
             </div>
-            <div className="job-status-area"><JobStatusBadge status={job.status} /></div>
+            <div className="job-status-area">
+              {!isRunning && (job.status === "error" || job.status === "completed") && (
+                <button type="button" className="btn-mini" title="Reprocessar com o perfil ativo" onClick={(e) => { e.stopPropagation(); onReprocess(job.jobId); }}><RefreshCw size={12} /></button>
+              )}
+              <JobStatusBadge status={job.status} />
+            </div>
           </div>
           {job.errorMessage && <div className="job-error-full"><AlertCircle size={13} /> <span>{job.errorMessage}</span></div>}
         </div>

@@ -311,6 +311,219 @@ pub async fn list_all_jobs(pool: &SqlitePool) -> Result<Vec<JobWithMedia>> {
     Ok(rows)
 }
 
+/// Re-queues failed jobs (optionally only within one source folder) so they can
+/// be retried, e.g. with a different active profile.
+pub async fn retry_failed_jobs(pool: &SqlitePool, project_id: Option<i64>) -> Result<u64> {
+    let result = match project_id {
+        Some(pid) => {
+            sqlx::query(
+                r#"
+                UPDATE transcription_jobs
+                SET status = 'pending', error_message = NULL, progress = 0,
+                    started_at = NULL, finished_at = NULL
+                WHERE status = 'error'
+                  AND media_file_id IN (SELECT id FROM media_files WHERE project_id = ?1)
+                "#,
+            )
+            .bind(pid)
+            .execute(pool)
+            .await?
+        }
+        None => {
+            sqlx::query(
+                r#"
+                UPDATE transcription_jobs
+                SET status = 'pending', error_message = NULL, progress = 0,
+                    started_at = NULL, finished_at = NULL
+                WHERE status = 'error'
+                "#,
+            )
+            .execute(pool)
+            .await?
+        }
+    };
+    Ok(result.rows_affected())
+}
+
+/// Resets a single job back to pending, discarding any existing transcription
+/// (used to reprocess a completed/errored file with a different configuration).
+pub async fn reset_job(pool: &SqlitePool, job_id: i64) -> Result<()> {
+    let tids: Vec<(i64,)> =
+        sqlx::query_as("SELECT id FROM transcriptions WHERE job_id = ?1")
+            .bind(job_id)
+            .fetch_all(pool)
+            .await?;
+    for (tid,) in &tids {
+        sqlx::query("DELETE FROM transcription_segments WHERE transcription_id = ?1")
+            .bind(tid)
+            .execute(pool)
+            .await?;
+    }
+    sqlx::query("DELETE FROM transcriptions WHERE job_id = ?1")
+        .bind(job_id)
+        .execute(pool)
+        .await?;
+    sqlx::query(
+        r#"
+        UPDATE transcription_jobs
+        SET status = 'pending', error_message = NULL, progress = 0,
+            started_at = NULL, finished_at = NULL
+        WHERE id = ?1
+        "#,
+    )
+    .bind(job_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectView {
+    pub id: i64,
+    pub name: String,
+    pub archived: bool,
+    pub default_profile_id: Option<i64>,
+    pub total: i64,
+    pub pending: i64,
+    pub processing: i64,
+    pub completed: i64,
+    pub error: i64,
+}
+
+pub async fn create_project(pool: &SqlitePool, name: &str) -> Result<i64> {
+    let now = Utc::now().to_rfc3339();
+    let r = sqlx::query("INSERT INTO projects (name, created_at, archived) VALUES (?1, ?2, 0)")
+        .bind(name)
+        .bind(now)
+        .execute(pool)
+        .await?;
+    Ok(r.last_insert_rowid())
+}
+
+/// Returns an existing non-archived project with this name, or creates one.
+pub async fn get_or_create_project_by_name(pool: &SqlitePool, name: &str) -> Result<i64> {
+    let existing: Option<(i64,)> =
+        sqlx::query_as("SELECT id FROM projects WHERE name = ?1 ORDER BY id LIMIT 1")
+            .bind(name)
+            .fetch_optional(pool)
+            .await?;
+    if let Some((id,)) = existing {
+        return Ok(id);
+    }
+    create_project(pool, name).await
+}
+
+pub async fn list_projects(pool: &SqlitePool) -> Result<Vec<ProjectView>> {
+    let rows = sqlx::query_as::<_, (i64, String, i64, Option<i64>, i64, i64, i64, i64, i64)>(
+        r#"
+        SELECT p.id, p.name, p.archived, p.default_profile_id,
+            COUNT(j.id) AS total,
+            COALESCE(SUM(CASE WHEN j.status = 'pending' THEN 1 ELSE 0 END), 0) AS pending,
+            COALESCE(SUM(CASE WHEN j.status = 'processing' THEN 1 ELSE 0 END), 0) AS processing,
+            COALESCE(SUM(CASE WHEN j.status = 'completed' THEN 1 ELSE 0 END), 0) AS completed,
+            COALESCE(SUM(CASE WHEN j.status = 'error' THEN 1 ELSE 0 END), 0) AS error
+        FROM projects p
+        LEFT JOIN media_files m ON m.project_id = p.id
+        LEFT JOIN transcription_jobs j ON j.media_file_id = m.id
+        GROUP BY p.id, p.name, p.archived, p.default_profile_id
+        ORDER BY p.archived, p.id
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, archived, dpid, total, pending, processing, completed, error)| ProjectView {
+            id, name, archived: archived != 0, default_profile_id: dpid,
+            total, pending, processing, completed, error,
+        })
+        .collect())
+}
+
+pub async fn rename_project(pool: &SqlitePool, id: i64, name: &str) -> Result<()> {
+    sqlx::query("UPDATE projects SET name = ?1 WHERE id = ?2")
+        .bind(name).bind(id).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn set_project_archived(pool: &SqlitePool, id: i64, archived: bool) -> Result<()> {
+    sqlx::query("UPDATE projects SET archived = ?1 WHERE id = ?2")
+        .bind(archived as i64).bind(id).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn set_project_default_profile(pool: &SqlitePool, id: i64, profile_id: Option<i64>) -> Result<()> {
+    sqlx::query("UPDATE projects SET default_profile_id = ?1 WHERE id = ?2")
+        .bind(profile_id).bind(id).execute(pool).await?;
+    Ok(())
+}
+
+/// Deletes all app data for a project (jobs, transcriptions, media rows). Audio
+/// files on disk are never touched.
+pub async fn delete_project(pool: &SqlitePool, id: i64) -> Result<()> {
+    sqlx::query(
+        "DELETE FROM transcription_segments WHERE transcription_id IN \
+         (SELECT t.id FROM transcriptions t JOIN media_files m ON m.id = t.media_file_id WHERE m.project_id = ?1)",
+    ).bind(id).execute(pool).await?;
+    sqlx::query("DELETE FROM transcriptions WHERE media_file_id IN (SELECT id FROM media_files WHERE project_id = ?1)")
+        .bind(id).execute(pool).await?;
+    sqlx::query("DELETE FROM transcription_jobs WHERE media_file_id IN (SELECT id FROM media_files WHERE project_id = ?1)")
+        .bind(id).execute(pool).await?;
+    sqlx::query("DELETE FROM media_files WHERE project_id = ?1").bind(id).execute(pool).await?;
+    sqlx::query("DELETE FROM projects WHERE id = ?1").bind(id).execute(pool).await?;
+    Ok(())
+}
+
+/// Resolves the profile to use for a media file: the project's default profile,
+/// if one is set.
+pub async fn resolve_profile_for_media(pool: &SqlitePool, media_file_id: i64) -> Result<Option<ProfileRow>> {
+    let row = sqlx::query_as::<_, ProfileRow>(
+        r#"
+        SELECT pr.id, pr.name, pr.backend, pr.model_path, pr.device, pr.precision,
+               pr.threads, pr.language, pr.task, pr.advanced_json
+        FROM media_files m
+        JOIN projects p ON p.id = m.project_id
+        JOIN transcription_profiles pr ON pr.id = p.default_profile_id
+        WHERE m.id = ?1
+        "#,
+    )
+    .bind(media_file_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Removes duplicate jobs left by older versions, keeping the most relevant per
+/// media file (completed > error > processing > pending, then newest).
+pub async fn cleanup_duplicate_jobs(pool: &SqlitePool) -> Result<u64> {
+    let dups: Vec<(i64,)> = sqlx::query_as(
+        r#"
+        SELECT id FROM (
+            SELECT id, ROW_NUMBER() OVER (
+                PARTITION BY media_file_id
+                ORDER BY CASE status
+                    WHEN 'completed' THEN 0 WHEN 'error' THEN 1
+                    WHEN 'processing' THEN 2 WHEN 'pending' THEN 3 ELSE 4 END,
+                    id DESC
+            ) AS rn
+            FROM transcription_jobs
+        ) WHERE rn > 1
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    for (jid,) in &dups {
+        sqlx::query("DELETE FROM transcription_segments WHERE transcription_id IN (SELECT id FROM transcriptions WHERE job_id = ?1)")
+            .bind(jid).execute(pool).await?;
+        sqlx::query("DELETE FROM transcriptions WHERE job_id = ?1").bind(jid).execute(pool).await?;
+        sqlx::query("DELETE FROM transcription_jobs WHERE id = ?1").bind(jid).execute(pool).await?;
+    }
+    Ok(dups.len() as u64)
+}
+
 pub async fn get_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>> {
     let row: Option<(String,)> = sqlx::query_as("SELECT value FROM app_settings WHERE key = ?1")
         .bind(key)

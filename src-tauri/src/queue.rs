@@ -7,7 +7,7 @@ use crate::{db, models::JobStatus, scanner::DiscoveredMedia};
 pub async fn enqueue_discovered_media(
     pool: &SqlitePool,
     discovered: &[DiscoveredMedia],
-    profile_id: Option<i64>,
+    project_id: Option<i64>,
 ) -> Result<Vec<i64>> {
     let mut tx = pool.begin().await?;
     let mut job_ids = Vec::with_capacity(discovered.len());
@@ -24,8 +24,8 @@ pub async fn enqueue_discovered_media(
         sqlx::query(
             r#"
             INSERT OR IGNORE INTO media_files
-            (source_root, absolute_path, relative_path, file_name, extension, size_bytes, modified_at, created_at, discovered_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            (source_root, absolute_path, relative_path, file_name, extension, size_bytes, modified_at, created_at, discovered_at, project_id)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             "#,
         )
         .bind(&source_root)
@@ -37,6 +37,7 @@ pub async fn enqueue_discovered_media(
         .bind(&modified_at)
         .bind(&created_at)
         .bind(discovered_at)
+        .bind(project_id)
         .execute(&mut *tx)
         .await?;
 
@@ -53,37 +54,38 @@ pub async fn enqueue_discovered_media(
         .fetch_one(&mut *tx)
         .await?;
 
+        // Ensure the (possibly pre-existing) media row belongs to this project.
+        if project_id.is_some() {
+            sqlx::query("UPDATE media_files SET project_id = ?1 WHERE id = ?2")
+                .bind(project_id)
+                .bind(media_file_id.0)
+                .execute(&mut *tx)
+                .await?;
+        }
+
         let created_at = Utc::now().to_rfc3339();
-        sqlx::query(
+        // Idempotent: only enqueue a job when this media has NO job yet (in any
+        // status). A re-scan must not duplicate files already completed/errored;
+        // it should only pick up genuinely new files.
+        let result = sqlx::query(
             r#"
-            INSERT OR IGNORE INTO transcription_jobs
+            INSERT INTO transcription_jobs
             (media_file_id, status, profile_id, progress, created_at)
-            VALUES (?1, 'pending', ?2, 0, ?3)
+            SELECT ?1, 'pending', NULL, 0, ?2
+            WHERE NOT EXISTS (
+                SELECT 1 FROM transcription_jobs WHERE media_file_id = ?1
+            )
             "#,
         )
         .bind(media_file_id.0)
-        .bind(profile_id)
         .bind(created_at)
         .execute(&mut *tx)
         .await?;
 
-        let job_id: (i64,) = sqlx::query_as(
-            r#"
-            SELECT id
-            FROM transcription_jobs
-            WHERE media_file_id = ?1
-              AND ((profile_id IS NULL AND ?2 IS NULL) OR profile_id = ?2)
-              AND status IN ('pending', 'processing')
-            ORDER BY id
-            LIMIT 1
-            "#,
-        )
-        .bind(media_file_id.0)
-        .bind(profile_id)
-        .fetch_one(&mut *tx)
-        .await?;
-
-        job_ids.push(job_id.0);
+        // Only count newly queued jobs.
+        if result.rows_affected() == 1 {
+            job_ids.push(result.last_insert_rowid());
+        }
     }
 
     tx.commit().await?;

@@ -54,6 +54,13 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::scan_source_folder,
+            commands::list_projects,
+            commands::create_project,
+            commands::rename_project,
+            commands::set_project_archived,
+            commands::set_project_default_profile,
+            commands::delete_project,
+            commands::cleanup_duplicate_jobs,
             commands::set_export_folder,
             commands::save_profile,
             commands::list_profiles,
@@ -62,6 +69,8 @@ fn main() {
             commands::set_active_profile,
             commands::start_transcription,
             commands::stop_transcription,
+            commands::retry_failed_jobs,
+            commands::reset_job,
             commands::get_concurrency,
             commands::set_concurrency,
             commands::list_jobs,
